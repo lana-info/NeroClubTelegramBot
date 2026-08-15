@@ -7,6 +7,7 @@ from app.access import apply_command, effective_access, upsert_user
 from app.db import Database
 from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
+from app.dashboard import rows_as_csv, rows_for_dashboard
 
 
 def database(tmp_path) -> Database:
@@ -107,3 +108,17 @@ def test_pending_stripe_job_marks_unknown_user_failed(tmp_path):
         )
         assert process_pending_stripe_events(connection) == {"processed": 0, "ignored": 0, "failed": 1}
         assert connection.execute("SELECT status FROM outbox_jobs").fetchone()["status"] == "failed"
+
+
+def test_dashboard_projection_contains_status_but_no_password(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        connection.execute(
+            "INSERT INTO users(telegram_id, telegram_username, wordpress_email) VALUES (?, ?, ?)",
+            (123, "anna", "anna@example.com"),
+        )
+        rows = rows_for_dashboard(connection)
+    csv_text = rows_as_csv(rows)
+    assert "telegram_id" in csv_text
+    assert "anna@example.com" in csv_text
+    assert "password" not in csv_text.lower()

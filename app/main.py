@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
+from fastapi.responses import PlainTextResponse
 
 from .access import apply_command, effective_access, upsert_user
 from .config import settings
@@ -14,6 +15,7 @@ from .webhooks import parse_event, verify_stripe_signature
 from .integrations.telegram import TelegramClient, TelegramError
 from .telegram_updates import process_update
 from .stripe_events import process_pending_stripe_events
+from .dashboard import rows_as_csv, rows_for_dashboard
 
 
 app = FastAPI(title="Nero Club Subscription Backend", version="0.1.0")
@@ -131,3 +133,16 @@ def user_access(user_id: int, _: str = Depends(require_admin)) -> dict[str, Any]
 def process_stripe_jobs(_: str = Depends(require_admin)) -> dict[str, Any]:
     with db.connect() as connection:
         return process_pending_stripe_events(connection)
+
+
+@app.get("/internal/sheets/preview")
+def sheets_preview(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = rows_for_dashboard(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.get("/internal/sheets/export.csv", response_class=PlainTextResponse)
+def sheets_export(_: str = Depends(require_admin)) -> str:
+    with db.connect() as connection:
+        return rows_as_csv(rows_for_dashboard(connection))

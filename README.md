@@ -9,6 +9,7 @@ The first vertical slice contains:
 - FastAPI backend;
 - SQLite schema for users, subscriptions, inbox events, outbox jobs, Sheets commands and audit log;
 - protected internal API for user records and Sheets commands;
+- protected Dashboard preview and CSV export for the future Google Sheets panel;
 - whitelist, manual allow/deny and manual access extension;
 - Stripe webhook signature verification and duplicate-event protection;
 - Stripe inbox/outbox worker for idempotent subscription-state updates;
@@ -17,7 +18,7 @@ The first vertical slice contains:
 - Docker configuration;
 - tests for authentication, idempotent Sheets commands and Stripe webhook handling.
 
-External Telegram, WordPress and Google credentials are intentionally not included. Telegram updates are accepted through a secret-protected webhook; payment workers, WordPress and Google Sheets provisioning remain subsequent tasks.
+External Telegram, WordPress and Google credentials are intentionally not included. Telegram updates are accepted through a secret-protected webhook; the Dashboard can be previewed/exported locally, while direct Google Sheets provisioning remains a subsequent task.
 
 ## Local setup
 
