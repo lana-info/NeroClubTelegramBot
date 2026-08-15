@@ -183,7 +183,7 @@ Verification:
 
 ## Task 7: Создать WordPress-плагин синхронизации
 
-Status: Todo
+Status: In progress
 
 Goal:
 Безопасно управлять WordPress-пользователями и входом без передачи открытых паролей.
