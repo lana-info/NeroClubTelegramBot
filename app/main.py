@@ -19,6 +19,7 @@ from .telegram_updates import process_update
 from .telegram_menu import BOT_COMMANDS
 from .stripe_events import process_pending_stripe_events
 from .site_access import process_pending_site_access_jobs
+from .membership import MembershipError, create_personal_invite, reconcile_members
 from .dashboard import rows_as_csv, rows_for_dashboard
 
 
@@ -180,6 +181,31 @@ def user_access(user_id: int, _: str = Depends(require_admin)) -> dict[str, Any]
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
         ).fetchone()
         return {"user_id": user_id, "effective_access": effective_access(user, subscription)}
+
+
+@app.post("/internal/users/{user_id}/invite")
+async def user_invite(user_id: int, _: str = Depends(require_admin)) -> dict[str, Any]:
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        raise HTTPException(status_code=503, detail="Telegram chat integration is not configured")
+    try:
+        telegram = TelegramClient(settings.telegram_bot_token)
+        with db.connect() as connection:
+            return await create_personal_invite(
+                connection, user_id, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
+            )
+    except MembershipError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/jobs/reconcile-telegram")
+async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        raise HTTPException(status_code=503, detail="Telegram chat integration is not configured")
+    telegram = TelegramClient(settings.telegram_bot_token)
+    with db.connect() as connection:
+        return await reconcile_members(
+            connection, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
+        )
 
 
 @app.post("/internal/jobs/process-stripe")

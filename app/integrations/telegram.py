@@ -45,6 +45,9 @@ class TelegramClient:
             payload["expire_date"] = expire_date
         return await self.call("createChatInviteLink", payload)
 
+    async def get_chat_member(self, chat_id: int | str, user_id: int) -> Any:
+        return await self.call("getChatMember", {"chat_id": chat_id, "user_id": user_id})
+
     async def approve_chat_join_request(self, chat_id: int | str, user_id: int) -> Any:
         return await self.call("approveChatJoinRequest", {"chat_id": chat_id, "user_id": user_id})
 

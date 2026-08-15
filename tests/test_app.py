@@ -10,6 +10,7 @@ from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
 from app.site_access import process_pending_site_access_jobs
+from app.membership import create_personal_invite, reconcile_members
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows
 from cryptography.fernet import Fernet
 
@@ -126,6 +127,30 @@ def test_sheet_key_sync_issues_and_revokes_without_returning_secret(tmp_path):
         assert "hidden-secret" not in json.dumps(result)
         result = sync_app_key_rows(connection, [{"key_id": "app-sync", "action": "revoke"}], encryption_key)
         assert result == {"synced": 0, "revoked": 1, "errors": []}
+
+
+def test_membership_reconciliation_is_safe_in_dry_run(tmp_path):
+    class FakeTelegram:
+        async def get_chat_member(self, chat_id, user_id):
+            return {"status": "member"}
+
+        async def create_chat_invite_link(self, *args, **kwargs):
+            raise AssertionError("dry-run must not call Telegram invite API")
+
+        async def ban_chat_member(self, *args, **kwargs):
+            raise AssertionError("dry-run must not remove members")
+
+    db = database(tmp_path)
+    with db.connect() as connection:
+        active = upsert_user(connection, {"telegram_id": 1})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub_active', 'active', 'paid', '2999-01-01T00:00:00+00:00')", (active["id"],)
+        )
+        upsert_user(connection, {"telegram_id": 2})
+        result = asyncio.run(reconcile_members(connection, FakeTelegram(), "-100", dry_run=True))
+        assert result == {"checked": 2, "active": 1, "denied": 1, "removed": 0, "would_remove": 1, "failed": 0}
+        assert asyncio.run(create_personal_invite(connection, active["id"], FakeTelegram(), "-100", dry_run=True))["status"] == "dry_run"
 
 
 def test_access_override_and_whitelist(tmp_path):
