@@ -3,6 +3,7 @@ import hmac
 import json
 import time
 import asyncio
+from datetime import datetime
 
 from app.access import apply_command, effective_access, upsert_user
 from app.db import Database
@@ -11,6 +12,7 @@ from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
 from app.site_access import process_pending_site_access_jobs
 from app.membership import create_personal_invite, reconcile_members
+from app.reminders import send_subscription_reminders
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows
 from cryptography.fernet import Fernet
 
@@ -151,6 +153,31 @@ def test_membership_reconciliation_is_safe_in_dry_run(tmp_path):
         result = asyncio.run(reconcile_members(connection, FakeTelegram(), "-100", dry_run=True))
         assert result == {"checked": 2, "active": 1, "denied": 1, "removed": 0, "would_remove": 1, "failed": 0}
         assert asyncio.run(create_personal_invite(connection, active["id"], FakeTelegram(), "-100", dry_run=True))["status"] == "dry_run"
+
+
+def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, chat_id, text):
+            self.messages.append((chat_id, text))
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    now = datetime.fromisoformat("2026-08-15T12:00:00+00:00")
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 44})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub_reminder', 'active', 'paid', '2026-08-22T00:00:00+00:00')", (user["id"],)
+        )
+        result = asyncio.run(send_subscription_reminders(connection, telegram, payment_url="https://pay.test", now=now))
+        assert result["sent"] == 1
+        assert "22.08.2026" in telegram.messages[0][1]
+        second = asyncio.run(send_subscription_reminders(connection, telegram, payment_url="https://pay.test", now=now))
+        assert second["sent"] == 0
+        assert second["skipped"] == 1
 
 
 def test_access_override_and_whitelist(tmp_path):

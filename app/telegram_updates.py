@@ -22,6 +22,7 @@ async def process_update(
     wordpress: WordPressClient | None = None,
     app_keys_encryption_key: str = "",
     admin_telegram_ids: tuple[int, ...] = (),
+    payment_url: str = "",
 ) -> str:
     update_id = update.get("update_id")
     if not isinstance(update_id, int):
@@ -157,11 +158,8 @@ async def process_update(
             text = "Ваши ключи приложений:\n\n" + "\n\n".join(items)
         await telegram.send_message(message_chat_id, text)
     elif command in {"/pay", "/renew"}:
-        await telegram.send_message(
-            message_chat_id,
-            "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору.",
-            reply_markup=REPLY_KEYBOARD,
-        )
+        text = f"Оплатить или продлить подписку: {payment_url}" if payment_url else "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
+        await telegram.send_message(message_chat_id, text, reply_markup=REPLY_KEYBOARD)
     elif command == "/site-access":
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)

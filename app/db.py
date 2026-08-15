@@ -133,6 +133,16 @@ class Database:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     resolved_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS notifications (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    notification_key TEXT NOT NULL,
+                    channel TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'sent',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, notification_key, channel)
+                );
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}

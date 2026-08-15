@@ -20,6 +20,7 @@ The first vertical slice contains:
 - Google Sheets actions `issue_credentials` and `resend_delivery` are queued without storing a password;
 - protected `/internal/jobs/process-site-access` worker endpoint for queued site-access delivery;
 - protected personal invite endpoint and dry-run Telegram membership reconciliation;
+- protected subscription reminder job for 7-day and 3-day notifications;
 - health endpoint;
 - Docker configuration;
 - tests for authentication, idempotent Sheets commands and Stripe webhook handling.
@@ -52,6 +53,8 @@ curl -X POST http://127.0.0.1:8000/internal/jobs/process-site-access \
 The worker requires configured Telegram and WordPress integrations. It never writes the generated password to the database, job payload, audit log or Google Sheets.
 
 Telegram access operations are available to the admin API as `/internal/users/{user_id}/invite` and `/internal/jobs/reconcile-telegram`. Reconciliation is non-destructive while `DRY_RUN=true`; only set it to `false` after testing the real chat and bot permissions.
+
+The reminder endpoint is `/internal/jobs/send-reminders`. Run it once per day from the server scheduler. It is idempotent and does not send messages while `DRY_RUN=true`. Set `PAYMENT_URL` when a payment page is available.
 
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The Google Sheets `Ключи приложений` tab is prepared for the next sync step.
 

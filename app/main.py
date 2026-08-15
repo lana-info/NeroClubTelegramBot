@@ -20,6 +20,7 @@ from .telegram_menu import BOT_COMMANDS
 from .stripe_events import process_pending_stripe_events
 from .site_access import process_pending_site_access_jobs
 from .membership import MembershipError, create_personal_invite, reconcile_members
+from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
 
 
@@ -163,6 +164,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 wordpress=wordpress,
                 app_keys_encryption_key=settings.app_keys_encryption_key,
                 admin_telegram_ids=settings.admin_telegram_ids,
+                payment_url=settings.payment_url,
             )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:
@@ -205,6 +207,17 @@ async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
     with db.connect() as connection:
         return await reconcile_members(
             connection, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
+        )
+
+
+@app.post("/internal/jobs/send-reminders")
+async def send_reminders(_: str = Depends(require_admin)) -> dict[str, int]:
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
+    telegram = TelegramClient(settings.telegram_bot_token)
+    with db.connect() as connection:
+        return await send_subscription_reminders(
+            connection, telegram, payment_url=settings.payment_url, dry_run=settings.dry_run
         )
 
 
