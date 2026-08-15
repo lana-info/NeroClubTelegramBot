@@ -110,3 +110,6 @@ class Database:
                 );
                 """
             )
+            columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}
+            if "wordpress_login" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN wordpress_login TEXT")

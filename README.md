@@ -14,6 +14,7 @@ The first vertical slice contains:
 - Stripe webhook signature verification and duplicate-event protection;
 - Stripe inbox/outbox worker for idempotent subscription-state updates;
 - Telegram webhook with `/start`, `/status` and `/help`, including `update_id` deduplication;
+- `/site-access` flow for active subscribers: temporary WordPress credentials are delivered privately and never stored;
 - health endpoint;
 - Docker configuration;
 - tests for authentication, idempotent Sheets commands and Stripe webhook handling.

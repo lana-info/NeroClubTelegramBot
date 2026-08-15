@@ -44,12 +44,14 @@ def upsert_user(db: sqlite3.Connection, payload: dict[str, Any]) -> sqlite3.Row:
         db.execute(
             """UPDATE users SET telegram_username = COALESCE(?, telegram_username),
                wordpress_user_id = COALESCE(?, wordpress_user_id),
+               wordpress_login = COALESCE(?, wordpress_login),
                wordpress_email = COALESCE(?, wordpress_email),
                wordpress_role = COALESCE(?, wordpress_role),
                updated_at = CURRENT_TIMESTAMP WHERE id = ?""",
             (
                 payload.get("telegram_username"),
                 payload.get("wordpress_user_id"),
+                payload.get("wordpress_login"),
                 payload.get("wordpress_email"),
                 payload.get("wordpress_role"),
                 existing["id"],
@@ -58,12 +60,13 @@ def upsert_user(db: sqlite3.Connection, payload: dict[str, Any]) -> sqlite3.Row:
     else:
         db.execute(
             """INSERT INTO users
-               (telegram_id, telegram_username, wordpress_user_id, wordpress_email, wordpress_role)
-               VALUES (?, ?, ?, ?, ?)""",
+               (telegram_id, telegram_username, wordpress_user_id, wordpress_login, wordpress_email, wordpress_role)
+               VALUES (?, ?, ?, ?, ?, ?)""",
             (
                 telegram_id,
                 payload.get("telegram_username"),
                 payload.get("wordpress_user_id"),
+                payload.get("wordpress_login"),
                 payload.get("wordpress_email"),
                 payload.get("wordpress_role"),
             ),

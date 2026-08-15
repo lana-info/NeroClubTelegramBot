@@ -13,6 +13,7 @@ from .config import settings
 from .db import Database
 from .webhooks import parse_event, verify_stripe_signature
 from .integrations.telegram import TelegramClient, TelegramError
+from .integrations.wordpress import WordPressClient
 from .telegram_updates import process_update
 from .stripe_events import process_pending_stripe_events
 from .dashboard import rows_as_csv, rows_for_dashboard
@@ -108,8 +109,14 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
     try:
         update = await request.json()
         telegram = TelegramClient(settings.telegram_bot_token)
+        wordpress = None
+        if settings.wordpress_base_url and settings.wordpress_shared_secret:
+            wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
         with db.connect() as connection:
-            result = await process_update(connection, update, telegram, chat_id=settings.telegram_chat_id)
+            result = await process_update(
+                connection, update, telegram, chat_id=settings.telegram_chat_id,
+                wordpress=wordpress, temporary_password_hours=settings.temporary_password_hours,
+            )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:
         raise HTTPException(status_code=400, detail="invalid Telegram update") from exc

@@ -10,6 +10,7 @@ defined('ABSPATH') || exit;
 
 const NCAC_API_NAMESPACE = 'nero-club/v1';
 const NCAC_ACCESS_META = '_nero_club_access_blocked';
+const NCAC_CREDENTIAL_EXPIRES_META = '_nero_club_credential_expires_at';
 
 function ncac_secret() {
     return defined('NERO_CLUB_SHARED_SECRET') ? (string) NERO_CLUB_SHARED_SECRET : '';
@@ -108,6 +109,10 @@ function ncac_sync_user(WP_REST_Request $request) {
     }
 
     if ($action === 'create_or_activate') {
+        $temporary_expires_at = sanitize_text_field((string) $request->get_param('temporary_expires_at'));
+        if ($password !== '' && ($temporary_expires_at === '' || strtotime($temporary_expires_at) <= time())) {
+            return new WP_Error('nero_club_invalid_expiry', 'Temporary credential expiry is required.', ['status' => 422]);
+        }
         $user->set_role($role);
         if ($password !== '') {
             if (strlen($password) < 16) {
@@ -116,11 +121,17 @@ function ncac_sync_user(WP_REST_Request $request) {
             wp_set_password($password, $user->ID);
         }
         update_user_meta($user->ID, NCAC_ACCESS_META, '0');
+        if ($password !== '') {
+            update_user_meta($user->ID, NCAC_CREDENTIAL_EXPIRES_META, (string) strtotime($temporary_expires_at));
+        } else {
+            delete_user_meta($user->ID, NCAC_CREDENTIAL_EXPIRES_META);
+        }
     } elseif ($action === 'deactivate') {
         update_user_meta($user->ID, NCAC_ACCESS_META, '1');
         ncac_destroy_sessions($user->ID);
     } elseif ($action === 'restore') {
         update_user_meta($user->ID, NCAC_ACCESS_META, '0');
+        delete_user_meta($user->ID, NCAC_CREDENTIAL_EXPIRES_META);
     }
 
     $result = [
@@ -137,6 +148,12 @@ function ncac_sync_user(WP_REST_Request $request) {
 function ncac_block_login($user, $username, $password) {
     if ($user instanceof WP_User && get_user_meta($user->ID, NCAC_ACCESS_META, true) === '1') {
         return new WP_Error('nero_club_access_blocked', 'Website access is inactive.');
+    }
+    if ($user instanceof WP_User) {
+        $expires = (int) get_user_meta($user->ID, NCAC_CREDENTIAL_EXPIRES_META, true);
+        if ($expires > 0 && $expires <= time()) {
+            return new WP_Error('nero_club_credential_expired', 'Temporary website credentials have expired.');
+        }
     }
     return $user;
 }

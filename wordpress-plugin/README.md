@@ -16,6 +16,6 @@ Configure the same secret in `wp-config.php` and the backend secret store:
 define('NERO_CLUB_SHARED_SECRET', 'replace-with-a-long-random-secret');
 ```
 
-Supported actions are `create_or_activate`, `deactivate`, and `restore`. Allowed WordPress roles default to `subscriber`; the plugin never accepts an administrator role from the request. Deactivation blocks future login and destroys active sessions without deleting the user.
+Supported actions are `create_or_activate`, `deactivate`, and `restore`. Allowed WordPress roles default to `subscriber`; the plugin never accepts an administrator role from the request. Deactivation blocks future login and destroys active sessions without deleting the user. When a temporary password is supplied, `temporary_expires_at` is required and the login is rejected after that time.
 
 Temporary passwords are accepted only for the short-lived create/activate operation. They are not written to the plugin response beyond `password_set: true`, not logged, and must be delivered to the user by the backend over Telegram. The Google Sheet stores only login/status/expiry metadata.
