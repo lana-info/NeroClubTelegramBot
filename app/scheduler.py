@@ -8,10 +8,10 @@ import httpx
 
 
 JOBS = {
-    "/internal/jobs/process-stripe": 60,
-    "/internal/jobs/process-site-access": 60,
+    "/internal/jobs/process-stripe": 900,
+    "/internal/jobs/process-site-access": 900,
     "/internal/jobs/send-reminders": 86400,
-    "/internal/jobs/reconcile-telegram": 3600,
+    "/internal/jobs/reconcile-telegram": 86400,
 }
 
 
@@ -27,7 +27,9 @@ async def main() -> None:
     base_url = os.getenv("BACKEND_INTERNAL_URL", "http://bot-backend:8000")
     token = os.getenv("ADMIN_API_TOKEN", "")
     if not token:
-        raise RuntimeError("ADMIN_API_TOKEN is required for scheduler")
+        print("scheduler waiting for ADMIN_API_TOKEN", flush=True)
+        while True:
+            await asyncio.sleep(3600)
     interval = max(10, int(os.getenv("SCHEDULER_INTERVAL_SECONDS", "60")))
     last_run: dict[str, float] = {}
     async with httpx.AsyncClient(timeout=30) as client:
