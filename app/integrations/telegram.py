@@ -26,8 +26,16 @@ class TelegramClient:
             raise TelegramError(body.get("description", "Telegram API error"))
         return body.get("result")
 
-    async def send_message(self, chat_id: int | str, text: str) -> Any:
-        return await self.call("sendMessage", {"chat_id": chat_id, "text": text})
+    async def send_message(
+        self, chat_id: int | str, text: str, *, reply_markup: dict[str, Any] | None = None
+    ) -> Any:
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": text}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
+        return await self.call("sendMessage", payload)
+
+    async def set_my_commands(self, commands: list[dict[str, str]]) -> Any:
+        return await self.call("setMyCommands", {"commands": commands})
 
     async def create_chat_invite_link(
         self, chat_id: int | str, *, expire_date: int | None = None, creates_join_request: bool = True

@@ -5,6 +5,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _telegram_ids(value: str) -> tuple[int, ...]:
+    result = []
+    for item in value.split(","):
+        item = item.strip()
+        if item:
+            result.append(int(item))
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/nero.db")
@@ -18,6 +27,7 @@ class Settings:
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    admin_telegram_ids: tuple[int, ...] = _telegram_ids(os.getenv("ADMIN_TELEGRAM_IDS", ""))
     wordpress_base_url: str = os.getenv("WORDPRESS_BASE_URL", "").rstrip("/")
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")
     app_keys_encryption_key: str = os.getenv("APP_KEYS_ENCRYPTION_KEY", "")

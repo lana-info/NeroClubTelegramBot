@@ -16,6 +16,7 @@ from .webhooks import parse_event, verify_stripe_signature
 from .integrations.telegram import TelegramClient, TelegramError
 from .integrations.wordpress import WordPressClient
 from .telegram_updates import process_update
+from .telegram_menu import BOT_COMMANDS
 from .stripe_events import process_pending_stripe_events
 from .site_access import process_pending_site_access_jobs
 from .dashboard import rows_as_csv, rows_for_dashboard
@@ -50,6 +51,14 @@ def create_or_update_user(payload: dict[str, Any], _: str = Depends(require_admi
             return {"id": user["id"], "telegram_id": user["telegram_id"], "status": "stored"}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/telegram/setup-menu")
+async def setup_telegram_menu(_: str = Depends(require_admin)) -> dict[str, str]:
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
+    await TelegramClient(settings.telegram_bot_token).set_my_commands(BOT_COMMANDS)
+    return {"status": "configured"}
 
 
 @app.post("/internal/app-keys", status_code=201)
@@ -152,6 +161,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 connection, update, telegram, chat_id=settings.telegram_chat_id,
                 wordpress=wordpress,
                 app_keys_encryption_key=settings.app_keys_encryption_key,
+                admin_telegram_ids=settings.admin_telegram_ids,
             )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:

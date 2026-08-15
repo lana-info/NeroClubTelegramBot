@@ -123,6 +123,16 @@ class Database:
                     revoked_at TEXT,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS support_requests (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    message_text TEXT,
+                    status TEXT NOT NULL DEFAULT 'awaiting_message',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    resolved_at TEXT
+                );
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}

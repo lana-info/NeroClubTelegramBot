@@ -44,6 +44,37 @@ def test_start_update_is_idempotent(tmp_path):
     assert second == "duplicate"
     assert len(transport.calls) == 1
     assert transport.calls[0]["chat_id"] == 42
+    assert transport.calls[0]["reply_markup"]["is_persistent"] is True
+    assert transport.calls[0]["reply_markup"]["keyboard"][0][0]["text"] == "📊 Статус подписки"
+
+
+def test_friendly_menu_button_is_mapped_to_command(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'menu.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {"update_id": 13, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "🔑 Мои ключи"}}
+    with db.connect() as connection:
+        assert asyncio.run(process_update(connection, update, client)) == "processed"
+    assert "ключей" in transport.calls[0]["text"].lower()
+
+
+def test_user_can_send_support_request_and_admin_can_reply(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'support.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    ask = {"update_id": 20, "message": {"chat": {"id": 42}, "from": {"id": 42, "username": "anna"}, "text": "/support"}}
+    message = {"update_id": 21, "message": {"chat": {"id": 42}, "from": {"id": 42, "username": "anna"}, "text": "Не могу войти"}}
+    reply = {"update_id": 22, "message": {"chat": {"id": 99}, "from": {"id": 99}, "text": "/reply 1 Попробуйте войти ещё раз"}}
+    with db.connect() as connection:
+        asyncio.run(process_update(connection, ask, client, admin_telegram_ids=(99,)))
+        asyncio.run(process_update(connection, message, client, admin_telegram_ids=(99,)))
+        assert transport.calls[1]["chat_id"] == 99
+        assert "Сообщение отправлено" in transport.calls[2]["text"]
+        asyncio.run(process_update(connection, reply, client, admin_telegram_ids=(99,)))
+        assert connection.execute("SELECT status FROM support_requests WHERE id = 1").fetchone()[0] == "answered"
+    assert any(call["chat_id"] == 42 and "Ответ администратора" in call["text"] for call in transport.calls)
 
 
 def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_path):
