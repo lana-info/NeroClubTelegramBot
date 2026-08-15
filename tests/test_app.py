@@ -10,7 +10,7 @@ from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
 from app.site_access import process_pending_site_access_jobs
-from app.keys import create_app_key, keys_for_user
+from app.keys import create_app_key, keys_for_user, sync_app_key_rows
 from cryptography.fernet import Fernet
 
 
@@ -111,6 +111,21 @@ def test_app_key_is_encrypted_and_respects_expiry(tmp_path):
         row = connection.execute("SELECT encrypted_key FROM app_keys").fetchone()
         assert row["encrypted_key"] != "secret-value"
         assert keys_for_user(connection, user["id"], encryption_key)[0]["key"] == "secret-value"
+
+
+def test_sheet_key_sync_issues_and_revokes_without_returning_secret(tmp_path):
+    db = database(tmp_path)
+    encryption_key = Fernet.generate_key().decode()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 1000})
+        result = sync_app_key_rows(connection, [{
+            "key_id": "app-sync", "app_name": "Sync App", "key": "hidden-secret",
+            "assigned_user_id": user["id"], "status": "issued", "action": "issue",
+        }], encryption_key)
+        assert result == {"synced": 1, "revoked": 0, "errors": []}
+        assert "hidden-secret" not in json.dumps(result)
+        result = sync_app_key_rows(connection, [{"key_id": "app-sync", "action": "revoke"}], encryption_key)
+        assert result == {"synced": 0, "revoked": 1, "errors": []}
 
 
 def test_access_override_and_whitelist(tmp_path):

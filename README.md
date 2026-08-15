@@ -51,6 +51,8 @@ The worker requires configured Telegram and WordPress integrations. It never wri
 
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The Google Sheets `Ключи приложений` tab is prepared for the next sync step.
 
+To connect the tab, copy `google-apps-script/KeysSync.gs` into Extensions → Apps Script for this spreadsheet. Set Script Properties `BACKEND_URL` and `ADMIN_API_TOKEN`, run `installKeySyncTrigger()` once, then run `syncAllKeys()`. The script checks the tab every five minutes and writes only a safe status to `last_result`.
+
 Tests:
 
 ```bash

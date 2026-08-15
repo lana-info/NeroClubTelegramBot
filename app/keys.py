@@ -66,11 +66,14 @@ def create_app_key(
     expires_at = payload.get("key_expires_at")
     if expires_at:
         datetime.fromisoformat(str(expires_at).replace("Z", "+00:00"))
+    status = payload.get("status") or "issued"
+    if status not in {"available", "issued", "expired", "revoked"}:
+        raise ValueError("invalid app key status")
     encrypted = encrypt_key(payload["key"], encryption_key)
     db.execute(
         """INSERT INTO app_keys
            (external_key_id, app_name, access_plan, encrypted_key, key_expires_at, assigned_user_id, status, issued_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'issued', CURRENT_TIMESTAMP)
+           VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'issued' THEN CURRENT_TIMESTAMP ELSE NULL END)
            ON CONFLICT(external_key_id) DO UPDATE SET
              app_name = excluded.app_name,
              access_plan = excluded.access_plan,
@@ -80,9 +83,38 @@ def create_app_key(
              status = excluded.status,
              revoked_at = NULL,
              updated_at = CURRENT_TIMESTAMP""",
-        (external_key_id, app_name.strip(), payload.get("access_plan"), encrypted, expires_at, user_id),
+        (external_key_id, app_name.strip(), payload.get("access_plan"), encrypted, expires_at, user_id, status, status),
     )
     return db.execute("SELECT * FROM app_keys WHERE external_key_id = ?", (external_key_id,)).fetchone()
+
+
+def sync_app_key_rows(
+    db: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+    encryption_key: str,
+) -> dict[str, Any]:
+    synced = revoked = 0
+    errors: list[dict[str, Any]] = []
+    for row_number, payload in enumerate(rows, start=2):
+        try:
+            action = str(payload.get("action") or "none").lower()
+            status = str(payload.get("status") or "issued").lower()
+            key_id = payload.get("key_id")
+            if action == "none":
+                continue
+            if action == "revoke" or status in {"revoked", "expired"}:
+                if not isinstance(key_id, str) or not key_id.strip():
+                    raise ValueError("key_id is required")
+                revoke_app_key(db, key_id)
+                revoked += 1
+                continue
+            if action != "issue":
+                raise ValueError("unsupported action")
+            create_app_key(db, payload, encryption_key)
+            synced += 1
+        except (AppKeyError, ValueError, TypeError) as exc:
+            errors.append({"row": row_number, "key_id": payload.get("key_id"), "error": str(exc)})
+    return {"synced": synced, "revoked": revoked, "errors": errors}
 
 
 def revoke_app_key(db: sqlite3.Connection, external_key_id: str) -> None:
