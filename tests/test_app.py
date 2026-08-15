@@ -6,6 +6,7 @@ import time
 from app.access import apply_command, effective_access, upsert_user
 from app.db import Database
 from app.webhooks import parse_event, verify_stripe_signature
+from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 
 
 def database(tmp_path) -> Database:
@@ -68,3 +69,41 @@ def test_stripe_signature_rejects_bad_signature():
         assert "timestamp" in str(exc)
     else:
         raise AssertionError("bad signature was accepted")
+
+
+def test_stripe_event_updates_subscription_and_is_safe_when_replayed(tmp_path):
+    db = database(tmp_path)
+    event = {
+        "id": "evt_paid",
+        "type": "invoice.paid",
+        "data": {"object": {
+            "subscription": "sub_1", "customer": "cus_1", "period_end": 4102444800,
+            "metadata": {"internal_user_id": "1"},
+        }},
+    }
+    with db.connect() as connection:
+        user = connection.execute("INSERT INTO users(telegram_id) VALUES (123) RETURNING id").fetchone()
+        event["data"]["object"]["metadata"]["internal_user_id"] = str(user["id"])
+        assert apply_stripe_event(connection, event) == "processed"
+        assert apply_stripe_event(connection, event) == "processed"
+        subscription = connection.execute("SELECT * FROM subscriptions").fetchall()
+        assert len(subscription) == 1
+        assert subscription[0]["payment_status"] == "paid"
+
+
+def test_pending_stripe_job_marks_unknown_user_failed(tmp_path):
+    db = database(tmp_path)
+    event = {"id": "evt_unknown", "type": "invoice.paid", "data": {"object": {
+        "subscription": "sub_unknown", "metadata": {"internal_user_id": "999"},
+    }}}
+    with db.connect() as connection:
+        connection.execute(
+            "INSERT INTO inbox_events(provider, external_event_id, event_type, payload) VALUES (?, ?, ?, ?)",
+            ("stripe", event["id"], event["type"], json.dumps(event)),
+        )
+        connection.execute(
+            "INSERT INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+            ("stripe.event", event["id"], json.dumps(event)),
+        )
+        assert process_pending_stripe_events(connection) == {"processed": 0, "ignored": 0, "failed": 1}
+        assert connection.execute("SELECT status FROM outbox_jobs").fetchone()["status"] == "failed"

@@ -11,6 +11,7 @@ The first vertical slice contains:
 - protected internal API for user records and Sheets commands;
 - whitelist, manual allow/deny and manual access extension;
 - Stripe webhook signature verification and duplicate-event protection;
+- Stripe inbox/outbox worker for idempotent subscription-state updates;
 - Telegram webhook with `/start`, `/status` and `/help`, including `update_id` deduplication;
 - health endpoint;
 - Docker configuration;

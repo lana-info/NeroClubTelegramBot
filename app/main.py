@@ -13,6 +13,7 @@ from .db import Database
 from .webhooks import parse_event, verify_stripe_signature
 from .integrations.telegram import TelegramClient, TelegramError
 from .telegram_updates import process_update
+from .stripe_events import process_pending_stripe_events
 
 
 app = FastAPI(title="Nero Club Subscription Backend", version="0.1.0")
@@ -124,3 +125,9 @@ def user_access(user_id: int, _: str = Depends(require_admin)) -> dict[str, Any]
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
         ).fetchone()
         return {"user_id": user_id, "effective_access": effective_access(user, subscription)}
+
+
+@app.post("/internal/jobs/process-stripe")
+def process_stripe_jobs(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        return process_pending_stripe_events(connection)
