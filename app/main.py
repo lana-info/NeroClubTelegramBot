@@ -11,6 +11,8 @@ from .access import apply_command, effective_access, upsert_user
 from .config import settings
 from .db import Database
 from .webhooks import parse_event, verify_stripe_signature
+from .integrations.telegram import TelegramClient, TelegramError
+from .telegram_updates import process_update
 
 
 app = FastAPI(title="Nero Club Subscription Backend", version="0.1.0")
@@ -92,6 +94,24 @@ async def stripe_webhook(request: Request, stripe_signature: str | None = Header
             ("stripe.event", event["id"], payload.decode("utf-8")),
         )
     return {"status": "accepted"}
+
+
+@app.post("/webhooks/telegram")
+async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: str | None = Header(default=None)) -> dict[str, str]:
+    if not settings.telegram_bot_token or not settings.telegram_webhook_secret:
+        raise HTTPException(status_code=503, detail="Telegram webhook is not configured")
+    if not hmac.compare_digest(x_telegram_bot_api_secret_token or "", settings.telegram_webhook_secret):
+        raise HTTPException(status_code=401, detail="unauthorized")
+    try:
+        update = await request.json()
+        telegram = TelegramClient(settings.telegram_bot_token)
+        with db.connect() as connection:
+            result = await process_update(connection, update, telegram, chat_id=settings.telegram_chat_id)
+        return {"status": result}
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="invalid Telegram update") from exc
+    except TelegramError as exc:
+        raise HTTPException(status_code=502, detail="Telegram API error") from exc
 
 
 @app.get("/internal/users/{user_id}/access")

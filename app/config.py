@@ -15,6 +15,9 @@ class Settings:
     )
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
     grace_period_days: int = int(os.getenv("GRACE_PERIOD_DAYS", "3"))
+    telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+    telegram_webhook_secret: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
 
 
 settings = Settings()

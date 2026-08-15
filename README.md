@@ -11,11 +11,12 @@ The first vertical slice contains:
 - protected internal API for user records and Sheets commands;
 - whitelist, manual allow/deny and manual access extension;
 - Stripe webhook signature verification and duplicate-event protection;
+- Telegram webhook with `/start`, `/status` and `/help`, including `update_id` deduplication;
 - health endpoint;
 - Docker configuration;
 - tests for authentication, idempotent Sheets commands and Stripe webhook handling.
 
-External Telegram, WordPress and Google credentials are intentionally not included. Webhook events are accepted into the inbox/outbox boundary; workers and provider adapters are subsequent tasks.
+External Telegram, WordPress and Google credentials are intentionally not included. Telegram updates are accepted through a secret-protected webhook; payment workers, WordPress and Google Sheets provisioning remain subsequent tasks.
 
 ## Local setup
 
