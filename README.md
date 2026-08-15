@@ -56,6 +56,8 @@ Telegram access operations are available to the admin API as `/internal/users/{u
 
 The reminder endpoint is `/internal/jobs/send-reminders`. Run it once per day from the server scheduler. It is idempotent and does not send messages while `DRY_RUN=true`. Set `PAYMENT_URL` when a payment page is available.
 
+For an isolated Docker scheduler, run `docker compose --profile automation up -d`. It processes Stripe and site-access queues every minute, reminders daily, and Telegram reconciliation hourly. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
+
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The Google Sheets `Ключи приложений` tab is prepared for the next sync step.
 
 Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. Users can choose `💬 Связаться с администратором`; administrators receive the request and answer with `/reply REQUEST_ID TEXT`.

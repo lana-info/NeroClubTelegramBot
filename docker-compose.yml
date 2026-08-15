@@ -9,3 +9,16 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+
+  scheduler:
+    profiles: ["automation"]
+    build: .
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      BACKEND_INTERNAL_URL: http://bot-backend:8000
+    depends_on:
+      - bot-backend
+    restart: unless-stopped
+    command: ["python", "-m", "app.scheduler"]
