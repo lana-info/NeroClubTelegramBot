@@ -20,7 +20,6 @@ class Settings:
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     wordpress_base_url: str = os.getenv("WORDPRESS_BASE_URL", "").rstrip("/")
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")
-    temporary_password_hours: int = int(os.getenv("TEMPORARY_PASSWORD_HOURS", "24"))
 
 
 settings = Settings()

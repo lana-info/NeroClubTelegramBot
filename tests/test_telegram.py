@@ -66,4 +66,5 @@ def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_pa
         assert result == "processed"
         assert "password" not in json.dumps(dict(connection.execute("SELECT * FROM users").fetchone())).lower()
     assert wordpress_transport.payload["password"]
-    assert "Временный пароль" in telegram_transport.calls[0]["text"]
+    assert "Постоянный пароль" in telegram_transport.calls[0]["text"]
+    assert "temporary_expires_at" not in wordpress_transport.payload

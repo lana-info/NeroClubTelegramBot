@@ -115,7 +115,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
         with db.connect() as connection:
             result = await process_update(
                 connection, update, telegram, chat_id=settings.telegram_chat_id,
-                wordpress=wordpress, temporary_password_hours=settings.temporary_password_hours,
+                wordpress=wordpress,
             )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:
