@@ -8,8 +8,8 @@ import httpx
 
 
 JOBS = {
-    "/internal/jobs/process-stripe": 900,
-    "/internal/jobs/process-site-access": 900,
+    "/internal/jobs/process-stripe": 3600,
+    "/internal/jobs/process-site-access": 3600,
     "/internal/jobs/send-reminders": 86400,
     "/internal/jobs/reconcile-telegram": 86400,
 }
