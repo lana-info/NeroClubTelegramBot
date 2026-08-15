@@ -10,6 +10,8 @@ from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
 from app.site_access import process_pending_site_access_jobs
+from app.keys import create_app_key, keys_for_user
+from cryptography.fernet import Fernet
 
 
 def database(tmp_path) -> Database:
@@ -90,6 +92,25 @@ def test_site_access_job_delivers_and_completes_sheet_command(tmp_path):
         stored = json.dumps(dict(connection.execute("SELECT payload, result FROM sheets_commands").fetchone()))
         assert wordpress.payload["password"] not in stored
         assert connection.execute("SELECT status FROM sheets_commands").fetchone()[0] == "done"
+
+
+def test_app_key_is_encrypted_and_respects_expiry(tmp_path):
+    db = database(tmp_path)
+    encryption_key = Fernet.generate_key().decode()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 999})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub_keys', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        create_app_key(connection, {
+            "key_id": "app-1", "app_name": "Example App", "key": "secret-value",
+            "user_id": user["id"], "key_expires_at": "2999-01-01T00:00:00+00:00",
+        }, encryption_key)
+        row = connection.execute("SELECT encrypted_key FROM app_keys").fetchone()
+        assert row["encrypted_key"] != "secret-value"
+        assert keys_for_user(connection, user["id"], encryption_key)[0]["key"] == "secret-value"
 
 
 def test_access_override_and_whitelist(tmp_path):

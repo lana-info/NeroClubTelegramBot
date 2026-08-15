@@ -108,6 +108,21 @@ class Database:
                     details TEXT NOT NULL,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
+
+                CREATE TABLE IF NOT EXISTS app_keys (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    external_key_id TEXT UNIQUE,
+                    app_name TEXT NOT NULL,
+                    access_plan TEXT,
+                    encrypted_key TEXT NOT NULL,
+                    key_expires_at TEXT,
+                    assigned_user_id INTEGER REFERENCES users(id),
+                    status TEXT NOT NULL DEFAULT 'issued',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    issued_at TEXT,
+                    revoked_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}

@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 
 from .access import apply_command, effective_access, upsert_user
+from .keys import AppKeyError, create_app_key, revoke_app_key
 from .config import settings
 from .db import Database
 from .webhooks import parse_event, verify_stripe_signature
@@ -49,6 +50,27 @@ def create_or_update_user(payload: dict[str, Any], _: str = Depends(require_admi
             return {"id": user["id"], "telegram_id": user["telegram_id"], "status": "stored"}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/app-keys", status_code=201)
+def create_or_update_app_key(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        with db.connect() as connection:
+            key = create_app_key(connection, payload, settings.app_keys_encryption_key)
+            return {
+                "key_id": key["external_key_id"], "app_name": key["app_name"],
+                "assigned_user_id": key["assigned_user_id"], "status": key["status"],
+                "key_expires_at": key["key_expires_at"],
+            }
+    except (AppKeyError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/app-keys/{key_id}/revoke")
+def revoke_key(key_id: str, _: str = Depends(require_admin)) -> dict[str, str]:
+    with db.connect() as connection:
+        revoke_app_key(connection, key_id)
+    return {"key_id": key_id, "status": "revoked"}
 
 
 @app.post("/internal/sheets/commands")
@@ -117,6 +139,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             result = await process_update(
                 connection, update, telegram, chat_id=settings.telegram_chat_id,
                 wordpress=wordpress,
+                app_keys_encryption_key=settings.app_keys_encryption_key,
             )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:

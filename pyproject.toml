@@ -12,6 +12,7 @@ dependencies = [
   "httpx>=0.27,<1",
   "uvicorn[standard]>=0.30,<1",
   "python-dotenv>=1,<2",
+  "cryptography>=42,<46",
 ]
 
 [project.optional-dependencies]

@@ -2,10 +2,12 @@ import asyncio
 import json
 
 import httpx
+from cryptography.fernet import Fernet
 
 from app.db import Database
 from app.integrations.telegram import TelegramClient
 from app.telegram_updates import process_update
+from app.keys import create_app_key
 
 
 class TelegramTransport(httpx.AsyncBaseTransport):
@@ -68,3 +70,28 @@ def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_pa
     assert wordpress_transport.payload["password"]
     assert "Постоянный пароль" in telegram_transport.calls[0]["text"]
     assert "temporary_expires_at" not in wordpress_transport.payload
+
+
+def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'keys.db'}")
+    db.init_schema()
+    telegram_transport = TelegramTransport()
+    telegram = TelegramClient("test-token", transport=telegram_transport)
+    encryption_key = Fernet.generate_key().decode()
+    update = {"update_id": 12, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/my-keys"}}
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id) VALUES (?) RETURNING id", (42,)
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub_keys', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        create_app_key(connection, {
+            "key_id": "app-1", "app_name": "Example App", "key": "secret-value",
+            "user_id": user["id"], "key_expires_at": "2999-09-30T00:00:00+00:00",
+        }, encryption_key)
+        assert asyncio.run(process_update(connection, update, telegram, app_keys_encryption_key=encryption_key)) == "processed"
+    assert "secret-value" in telegram_transport.calls[0]["text"]
+    assert "30.09.2999" in telegram_transport.calls[0]["text"]

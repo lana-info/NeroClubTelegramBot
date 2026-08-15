@@ -15,6 +15,7 @@ The first vertical slice contains:
 - Stripe inbox/outbox worker for idempotent subscription-state updates;
 - Telegram webhook with `/start`, `/status` and `/help`, including `update_id` deduplication;
 - `/site-access` flow for active subscribers: permanent WordPress credentials are delivered privately and never stored;
+- `/my-keys` flow for active subscribers: assigned application keys are delivered privately with their expiry date;
 - Google Sheets actions `issue_credentials` and `resend_delivery` are queued without storing a password;
 - protected `/internal/jobs/process-site-access` worker endpoint for queued site-access delivery;
 - health endpoint;
@@ -47,6 +48,8 @@ curl -X POST http://127.0.0.1:8000/internal/jobs/process-site-access \
 ```
 
 The worker requires configured Telegram and WordPress integrations. It never writes the generated password to the database, job payload, audit log or Google Sheets.
+
+Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The Google Sheets `Ключи приложений` tab is prepared for the next sync step.
 
 Tests:
 

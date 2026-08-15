@@ -20,6 +20,7 @@ class Settings:
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     wordpress_base_url: str = os.getenv("WORDPRESS_BASE_URL", "").rstrip("/")
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")
+    app_keys_encryption_key: str = os.getenv("APP_KEYS_ENCRYPTION_KEY", "")
 
 
 settings = Settings()

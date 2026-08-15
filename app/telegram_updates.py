@@ -8,6 +8,7 @@ from .access import effective_access, upsert_user
 from .integrations.telegram import TelegramClient
 from .integrations.wordpress import WordPressClient
 from .site_access import SiteAccessError, issue_site_credentials
+from .keys import AppKeyError, display_expiry, keys_for_user
 
 
 def _command(text: str | None) -> str | None:
@@ -23,6 +24,7 @@ async def process_update(
     *,
     chat_id: int | str | None = None,
     wordpress: WordPressClient | None = None,
+    app_keys_encryption_key: str = "",
 ) -> str:
     update_id = update.get("update_id")
     if not isinstance(update_id, int):
@@ -60,7 +62,23 @@ async def process_update(
             text += f" Доступ до: {until}."
         await telegram.send_message(message_chat_id, text)
     elif command == "/help":
-        await telegram.send_message(message_chat_id, "/start — регистрация\n/status — статус\n/site-access — доступ к сайту\n/pay — оплата\n/renew — продление")
+        await telegram.send_message(message_chat_id, "/start — регистрация\n/status — статус\n/site-access — доступ к сайту\n/my-keys — ключи приложений\n/pay — оплата\n/renew — продление")
+    elif command == "/my-keys":
+        try:
+            keys = keys_for_user(db, user["id"], app_keys_encryption_key)
+        except (AppKeyError, ValueError):
+            keys = None
+        if keys is None:
+            text = "Выдача ключей пока не настроена. Обратитесь к администратору."
+        elif not keys:
+            text = "Для вашей активной подписки пока нет доступных ключей."
+        else:
+            items = []
+            for item in keys:
+                expires = display_expiry(item["key_expires_at"])
+                items.append(f"{item['app_name']}\nКлюч: {item['key']}\nДействует до: {expires}")
+            text = "Ваши ключи приложений:\n\n" + "\n\n".join(items)
+        await telegram.send_message(message_chat_id, text)
     elif command == "/site-access":
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
