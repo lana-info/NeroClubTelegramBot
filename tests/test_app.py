@@ -2,12 +2,14 @@ import hashlib
 import hmac
 import json
 import time
+import asyncio
 
 from app.access import apply_command, effective_access, upsert_user
 from app.db import Database
 from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
+from app.site_access import process_pending_site_access_jobs
 
 
 def database(tmp_path) -> Database:
@@ -41,6 +43,53 @@ def test_sheet_command_is_idempotent(tmp_path):
         assert second["status"] == "done"
         stored = connection.execute("SELECT whitelist FROM users WHERE id = ?", (user["id"],)).fetchone()
         assert stored["whitelist"] == 1
+
+
+def test_sheet_credentials_command_is_queued_without_password(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 456})
+        result = apply_command(connection, "cred-1", user["id"], "issue_credentials", {}, "test-admin")
+        assert result["status"] == "queued"
+        job = connection.execute("SELECT kind, payload FROM outbox_jobs").fetchone()
+        assert job["kind"] == "site.credentials"
+        assert "password" not in job["payload"].lower()
+
+
+def test_site_access_job_delivers_and_completes_sheet_command(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.messages = []
+
+        async def send_message(self, chat_id, text):
+            self.messages.append((chat_id, text))
+
+    class FakeWordPress:
+        async def sync_user(self, payload, idempotency_key):
+            self.payload = payload
+            self.idempotency_key = idempotency_key
+            return {"user_id": 9, "login": "anna"}
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    wordpress = FakeWordPress()
+    with db.connect() as connection:
+        user = upsert_user(connection, {
+            "telegram_id": 456, "wordpress_email": "anna@example.com", "wordpress_login": "anna",
+        })
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub_1', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        apply_command(connection, "cred-2", user["id"], "issue_credentials", {}, "test-admin")
+        result = asyncio.run(process_pending_site_access_jobs(connection, telegram, wordpress))
+        assert result == {"processed": 1, "failed": 0}
+        assert telegram.messages[0][0] == 456
+        assert "Постоянный пароль:" in telegram.messages[0][1]
+        stored = json.dumps(dict(connection.execute("SELECT payload, result FROM sheets_commands").fetchone()))
+        assert wordpress.payload["password"] not in stored
+        assert connection.execute("SELECT status FROM sheets_commands").fetchone()[0] == "done"
 
 
 def test_access_override_and_whitelist(tmp_path):

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-import secrets
 import sqlite3
 from typing import Any
 
 from .access import effective_access, upsert_user
 from .integrations.telegram import TelegramClient
-from .integrations.wordpress import WordPressClient, WordPressError
+from .integrations.wordpress import WordPressClient
+from .site_access import SiteAccessError, issue_site_credentials
 
 
 def _command(text: str | None) -> str | None:
@@ -70,28 +70,12 @@ async def process_update(
         elif wordpress is None:
             await telegram.send_message(message_chat_id, "Доступ к сайту пока не настроен. Обратитесь к администратору.")
         else:
-            permanent_password = secrets.token_urlsafe(18)
             try:
-                result = await wordpress.sync_user(
-                    {
-                        "action": "create_or_activate",
-                        "user_id": user["wordpress_user_id"] or 0,
-                        "username": user["wordpress_login"] or "",
-                        "email": user["wordpress_email"] or "",
-                        "role": user["wordpress_role"] or "subscriber",
-                        "password": permanent_password,
-                    },
-                    f"telegram-site-access-{update_id}",
+                await issue_site_credentials(
+                    db, user["id"], telegram, wordpress,
+                    idempotency_key=f"telegram-site-access-{update_id}",
                 )
-            except (WordPressError, ValueError):
+            except (SiteAccessError, ValueError):
                 await telegram.send_message(message_chat_id, "Не удалось выдать доступ к сайту. Попробуйте позже.")
-            else:
-                await telegram.send_message(
-                    message_chat_id,
-                    "Доступ к сайту выдан.\n"
-                    f"Логин: {result['login']}\n"
-                    f"Постоянный пароль: {permanent_password}\n\n"
-                    "Не пересылайте это сообщение. При повторном запросе пароль будет заменён новым.",
-                )
     db.execute("UPDATE inbox_events SET processed_at = CURRENT_TIMESTAMP WHERE provider = 'telegram' AND external_event_id = ?", (str(update_id),))
     return "processed"

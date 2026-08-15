@@ -16,6 +16,7 @@ from .integrations.telegram import TelegramClient, TelegramError
 from .integrations.wordpress import WordPressClient
 from .telegram_updates import process_update
 from .stripe_events import process_pending_stripe_events
+from .site_access import process_pending_site_access_jobs
 from .dashboard import rows_as_csv, rows_for_dashboard
 
 
@@ -140,6 +141,16 @@ def user_access(user_id: int, _: str = Depends(require_admin)) -> dict[str, Any]
 def process_stripe_jobs(_: str = Depends(require_admin)) -> dict[str, Any]:
     with db.connect() as connection:
         return process_pending_stripe_events(connection)
+
+
+@app.post("/internal/jobs/process-site-access")
+async def process_site_access_jobs(_: str = Depends(require_admin)) -> dict[str, Any]:
+    if not settings.telegram_bot_token or not settings.wordpress_base_url or not settings.wordpress_shared_secret:
+        raise HTTPException(status_code=503, detail="Telegram and WordPress integrations are not configured")
+    telegram = TelegramClient(settings.telegram_bot_token)
+    wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
+    with db.connect() as connection:
+        return await process_pending_site_access_jobs(connection, telegram, wordpress)
 
 
 @app.get("/internal/sheets/preview")

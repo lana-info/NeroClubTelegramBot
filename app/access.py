@@ -77,7 +77,7 @@ def upsert_user(db: sqlite3.Connection, payload: dict[str, Any]) -> sqlite3.Row:
 def apply_command(
     db: sqlite3.Connection, command_id: str, user_id: int, action: str, payload: dict[str, Any], actor: str
 ) -> dict[str, Any]:
-    allowed = {"whitelist", "unwhitelist", "deny", "allow", "extend"}
+    allowed = {"whitelist", "unwhitelist", "deny", "allow", "extend", "issue_credentials", "resend_delivery"}
     if action not in allowed:
         raise ValueError(f"unsupported action: {action}")
     existing = db.execute(
@@ -104,14 +104,25 @@ def apply_command(
             (until, user_id),
         )
 
-    result = json.dumps({"action": action, "user_id": user_id}, ensure_ascii=False)
+    if action in {"issue_credentials", "resend_delivery"}:
+        db.execute(
+            "INSERT INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+            ("site.credentials", f"sheets-site-access-{command_id}", json.dumps({
+                "command_id": command_id, "user_id": user_id, "action": action,
+            }, ensure_ascii=False)),
+        )
+        status = "queued"
+        result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
+    else:
+        status = "done"
+        result = json.dumps({"action": action, "user_id": user_id}, ensure_ascii=False)
     db.execute(
         """INSERT INTO sheets_commands(command_id, user_id, action, payload, requested_by, status, result, completed_at)
-           VALUES (?, ?, ?, ?, ?, 'done', ?, CURRENT_TIMESTAMP)""",
-        (command_id, user_id, action, json.dumps(payload), actor, result),
+           VALUES (?, ?, ?, ?, ?, ?, ?, CASE WHEN ? = 'done' THEN CURRENT_TIMESTAMP ELSE NULL END)""",
+        (command_id, user_id, action, json.dumps(payload), actor, status, result, status),
     )
     db.execute(
         "INSERT INTO audit_log(actor, action, user_id, details) VALUES (?, ?, ?, ?)",
         (actor, f"sheets.{action}", user_id, result),
     )
-    return {"command_id": command_id, "status": "done", "result": result}
+    return {"command_id": command_id, "status": status, "result": result}
