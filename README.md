@@ -31,7 +31,7 @@ The first vertical slice contains:
 - Docker configuration;
 - tests for authentication, idempotent Sheets commands and Stripe webhook handling.
 
-External Telegram, WordPress and Google credentials are intentionally not included. Telegram updates are accepted through a secret-protected webhook; the Dashboard can be previewed/exported locally, while direct Google Sheets provisioning remains a subsequent task.
+External Telegram, WordPress and Google credentials are intentionally not included. Telegram updates are accepted through a secret-protected webhook; the operational Google Sheets panel is connected through the Apps Script sync described below.
 
 ## Local setup
 
@@ -64,7 +64,7 @@ The reminder endpoint is `/internal/jobs/send-reminders`. Run it once per day fr
 
 The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe and site-access queues hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
 
-Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The Google Sheets `Ключи приложений` tab is prepared for the next sync step.
+Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
 
 Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. Users can choose `💬 Связаться с администратором`; administrators receive the request and answer with `/reply REQUEST_ID TEXT`.
 
@@ -72,7 +72,16 @@ After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_URL`, call the prot
 `/internal/telegram/setup-menu` endpoint once. It publishes the command list and
 sets Telegram `allowed_updates` to `message` and `chat_member`.
 
-To connect the tab, copy `google-apps-script/KeysSync.gs` into Extensions → Apps Script for this spreadsheet. Set Script Properties `BACKEND_URL` and `ADMIN_API_TOKEN`, run `installKeySyncTrigger()` once, then run `syncAllKeys()`. The script checks the tab every five minutes and writes only a safe status to `last_result`.
+To connect the operational panel, copy `google-apps-script/SheetsSync.gs` and
+`google-apps-script/KeysSync.gs` into Extensions → Apps Script for the new
+spreadsheet. Set Script Properties `BACKEND_URL` and `ADMIN_API_TOKEN`. Run
+`importCurrentSnapshot()` once before the first pull sync; it imports users and
+subscription dates and replaces legacy `user_id` values with backend IDs. Then
+run `syncAllSheets()` once and `installSheetsSyncTrigger()` once. Every five
+minutes the panel first imports new or edited user rows, then executes commands
+and refreshes users, site access, and Dashboard. If the backend has no users,
+pull sync stops instead of erasing the sheet. Never store bot, payment,
+WordPress, or encryption secrets in the sheet.
 
 Tests:
 

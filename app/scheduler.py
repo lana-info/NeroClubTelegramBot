@@ -12,6 +12,7 @@ JOBS = {
     "/internal/jobs/process-site-access": 3600,
     "/internal/jobs/send-reminders": 86400,
     "/internal/jobs/reconcile-telegram": 86400,
+    "/internal/jobs/process-telegram-restores": 3600,
 }
 
 

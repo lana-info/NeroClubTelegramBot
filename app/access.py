@@ -77,7 +77,10 @@ def upsert_user(db: sqlite3.Connection, payload: dict[str, Any]) -> sqlite3.Row:
 def apply_command(
     db: sqlite3.Connection, command_id: str, user_id: int, action: str, payload: dict[str, Any], actor: str
 ) -> dict[str, Any]:
-    allowed = {"whitelist", "unwhitelist", "deny", "allow", "extend", "restore_telegram", "issue_credentials", "resend_delivery"}
+    allowed = {
+        "whitelist", "unwhitelist", "deny", "allow", "extend", "restore_telegram",
+        "issue_credentials", "resend_delivery", "revoke_site_access", "restore_site_access",
+    }
     if action not in allowed:
         raise ValueError(f"unsupported action: {action}")
     existing = db.execute(
@@ -105,12 +108,26 @@ def apply_command(
         )
 
     restore_queued = False
-    if action == "restore_telegram":
+    site_command_queued = False
+    if action in {"revoke_site_access", "restore_site_access"}:
+        site_action = "deactivate" if action == "revoke_site_access" else "restore"
         db.execute(
-            "UPDATE users SET telegram_banned = 0, telegram_ban_source = NULL, "
-            "telegram_membership_status = 'unknown', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+            (
+                f"site.{site_action}", f"sheets-site-{site_action}-{command_id}",
+                json.dumps({"command_id": command_id, "user_id": user_id, "action": site_action}),
+            ),
+        )
+        site_command_queued = True
+    if action == "restore_telegram":
+        user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user or not user["telegram_banned"]:
+            raise ValueError("user does not have a manual Telegram ban")
+        db.execute(
+            "UPDATE users SET telegram_membership_status = 'unknown', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             (user_id,),
         )
+        db.execute("UPDATE users SET telegram_banned = 0 WHERE id = ?", (user_id,))
         restored_user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
@@ -118,11 +135,12 @@ def apply_command(
         if effective_access(restored_user, subscription) == "active":
             db.execute(
                 "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
-                ("site.restore", f"sheets-telegram-restore-{command_id}", json.dumps({
+                ("telegram.restore", f"sheets-telegram-restore-{command_id}", json.dumps({
                     "command_id": command_id, "user_id": user_id, "action": action,
                 }, ensure_ascii=False)),
             )
             restore_queued = True
+        db.execute("UPDATE users SET telegram_banned = 1 WHERE id = ?", (user_id,))
 
     if action in {"issue_credentials", "resend_delivery"}:
         db.execute(
@@ -131,6 +149,9 @@ def apply_command(
                 "command_id": command_id, "user_id": user_id, "action": action,
             }, ensure_ascii=False)),
         )
+        status = "queued"
+        result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
+    elif site_command_queued:
         status = "queued"
         result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
     elif action == "restore_telegram":

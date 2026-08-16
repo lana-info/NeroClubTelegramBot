@@ -19,9 +19,10 @@ from .telegram_updates import process_update
 from .telegram_menu import BOT_COMMANDS
 from .stripe_events import process_pending_stripe_events
 from .site_access import process_pending_site_access_jobs
-from .membership import MembershipError, create_personal_invite, reconcile_members
+from .membership import MembershipError, create_personal_invite, process_pending_telegram_restore_jobs, reconcile_members
 from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
+from .sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
 
 
 app = FastAPI(title="Nero Club Subscription Backend", version="0.1.0")
@@ -53,6 +54,39 @@ def create_or_update_user(payload: dict[str, Any], _: str = Depends(require_admi
             return {"id": user["id"], "telegram_id": user["telegram_id"], "status": "stored"}
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/sheets/import")
+def import_sheet_snapshot(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[str, Any]:
+    rows = payload.get("users")
+    if not isinstance(rows, list):
+        raise HTTPException(status_code=422, detail="users must be a list")
+    try:
+        with db.connect() as connection:
+            return {"users": import_users(connection, rows)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/internal/sheets/users")
+def sheets_users(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = rows_for_users_sheet(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.get("/internal/sheets/site-access")
+def sheets_site_access(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = rows_for_site_access_sheet(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.get("/internal/sheets/dashboard")
+def sheets_dashboard(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = dashboard_rows(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
 
 
 @app.post("/internal/telegram/setup-menu")
@@ -211,6 +245,17 @@ async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
     telegram = TelegramClient(settings.telegram_bot_token)
     with db.connect() as connection:
         return await reconcile_members(
+            connection, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
+        )
+
+
+@app.post("/internal/jobs/process-telegram-restores")
+async def process_telegram_restores(_: str = Depends(require_admin)) -> dict[str, int]:
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        raise HTTPException(status_code=503, detail="Telegram chat integration is not configured")
+    telegram = TelegramClient(settings.telegram_bot_token)
+    with db.connect() as connection:
+        return await process_pending_telegram_restore_jobs(
             connection, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
         )
 

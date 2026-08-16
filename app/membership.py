@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 import sqlite3
 from typing import Any
 
 from .access import effective_access
-from .integrations.telegram import TelegramClient
+from .integrations.telegram import TelegramClient, TelegramError
 from .site_access import queue_site_access_job
 
 
@@ -89,3 +90,73 @@ async def reconcile_members(
         "checked": checked, "active": active, "denied": denied,
         "removed": removed, "would_remove": would_remove, "failed": failed,
     }
+
+
+async def process_pending_telegram_restore_jobs(
+    db: sqlite3.Connection,
+    telegram: TelegramClient,
+    chat_id: int | str,
+    *,
+    dry_run: bool,
+    limit: int = 20,
+) -> dict[str, int]:
+    jobs = db.execute(
+        "SELECT id, aggregate_key, payload, attempts FROM outbox_jobs "
+        "WHERE kind = 'telegram.restore' AND status = 'pending' ORDER BY id LIMIT ?",
+        (limit,),
+    ).fetchall()
+    processed = failed = skipped = 0
+    for job in jobs:
+        payload = json.loads(job["payload"])
+        if dry_run:
+            skipped += 1
+            continue
+        try:
+            user = db.execute("SELECT * FROM users WHERE id = ?", (int(payload["user_id"]),)).fetchone()
+            if not user or not user["telegram_banned"]:
+                raise MembershipError("manual Telegram ban is no longer present")
+            subscription = db.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
+            ).fetchone()
+            db.execute("UPDATE users SET telegram_banned = 0 WHERE id = ?", (user["id"],))
+            if effective_access(db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone(), subscription) != "active":
+                db.execute("UPDATE users SET telegram_banned = 1 WHERE id = ?", (user["id"],))
+                raise MembershipError("restore requires active access")
+            await telegram.unban_chat_member(chat_id, user["telegram_id"])
+            invite_result = await telegram.create_chat_invite_link(
+                chat_id,
+                expire_date=int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+                creates_join_request=True,
+            )
+            invite_link = invite_result.get("invite_link") if isinstance(invite_result, dict) else None
+            if not invite_link:
+                raise MembershipError("Telegram returned no invite link")
+            await telegram.send_message(
+                user["telegram_id"],
+                "Вас разблокировали. Используйте новую ссылку для вступления:\n" + invite_link,
+            )
+            db.execute(
+                "UPDATE users SET telegram_banned = 0, telegram_ban_source = NULL, "
+                "telegram_membership_status = 'unknown', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (user["id"],),
+            )
+            db.execute("UPDATE outbox_jobs SET status = 'done', processed_at = CURRENT_TIMESTAMP WHERE id = ?", (job["id"],))
+            if payload.get("command_id"):
+                db.execute(
+                    "UPDATE sheets_commands SET status = 'done', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
+                    (json.dumps({"invite_link_sent": True}, ensure_ascii=False), payload["command_id"]),
+                )
+            processed += 1
+        except (MembershipError, ValueError, KeyError, json.JSONDecodeError, TelegramError) as exc:
+            db.execute("UPDATE users SET telegram_banned = 1 WHERE id = ?", (int(payload["user_id"]),))
+            db.execute(
+                "UPDATE outbox_jobs SET status = 'failed', attempts = attempts + 1, last_error = ? WHERE id = ?",
+                (str(exc), job["id"]),
+            )
+            if payload.get("command_id"):
+                db.execute(
+                    "UPDATE sheets_commands SET status = 'error', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
+                    (json.dumps({"error": str(exc)}, ensure_ascii=False), payload["command_id"]),
+                )
+            failed += 1
+    return {"processed": processed, "failed": failed, "skipped": skipped}

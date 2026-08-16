@@ -11,9 +11,10 @@ from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
 from app.site_access import process_pending_site_access_jobs, queue_site_access_job
-from app.membership import create_personal_invite, reconcile_members
+from app.membership import create_personal_invite, process_pending_telegram_restore_jobs, reconcile_members
 from app.reminders import send_subscription_reminders
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows
+from app.sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
 from cryptography.fernet import Fernet
 
 
@@ -129,6 +130,62 @@ def test_sheet_key_sync_issues_and_revokes_without_returning_secret(tmp_path):
         assert "hidden-secret" not in json.dumps(result)
         result = sync_app_key_rows(connection, [{"key_id": "app-sync", "action": "revoke"}], encryption_key)
         assert result == {"synced": 0, "revoked": 1, "errors": []}
+
+
+def test_sheet_snapshot_import_is_idempotent_and_exposes_operational_rows(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        payload = [{
+            "telegram_id": 12345,
+            "username": "@anna",
+            "wordpress_email": "anna@example.com",
+            "provider": "stripe",
+            "provider_paid_until": "2999-01-01",
+            "whitelist": "no",
+            "access_override": "none",
+        }]
+        first = import_users(connection, payload)
+        second = import_users(connection, payload)
+        assert first == second
+        assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0] == 1
+        user_rows = rows_for_users_sheet(connection)
+        site_rows = rows_for_site_access_sheet(connection)
+        metrics = dashboard_rows(connection)
+        assert user_rows[0][0:6] == ["user_id", "telegram_id", "username", "wordpress_email", "wordpress_role", "access"]
+        assert user_rows[1][2] == "@anna"
+        assert user_rows[1][5] == "active"
+        assert site_rows[1][7] == "active"
+        assert ["total_users", 1] in metrics
+
+
+def test_site_access_sheet_matches_delivery_by_exact_user_id(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        first = upsert_user(connection, {"telegram_id": 1, "wordpress_email": "one@example.com"})
+        second = upsert_user(connection, {"telegram_id": 10, "wordpress_email": "ten@example.com"})
+        connection.execute(
+            "INSERT INTO outbox_jobs(kind, aggregate_key, payload, status) VALUES ('site.credentials', 'delivery-10', ?, 'done')",
+            (json.dumps({"user_id": second["id"]}),),
+        )
+        rows = rows_for_site_access_sheet(connection)
+        first_row = next(row for row in rows[1:] if row[0] == first["id"])
+        second_row = next(row for row in rows[1:] if row[0] == second["id"])
+        assert first_row[8] == "not_requested"
+        assert second_row[8] == "done"
+
+
+def test_site_access_sheet_commands_queue_wordpress_jobs(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 12345, "wordpress_email": "anna@example.com"})
+        revoke = apply_command(connection, "site-1", user["id"], "revoke_site_access", {}, "sheet")
+        restore = apply_command(connection, "site-2", user["id"], "restore_site_access", {}, "sheet")
+        assert revoke["status"] == "queued"
+        assert restore["status"] == "queued"
+        jobs = connection.execute("SELECT kind, payload FROM outbox_jobs ORDER BY id").fetchall()
+        assert [job["kind"] for job in jobs] == ["site.deactivate", "site.restore"]
+        assert '"command_id": "site-1"' in jobs[0]["payload"]
 
 
 def test_membership_reconciliation_is_safe_in_dry_run(tmp_path):
@@ -268,9 +325,44 @@ def test_restore_telegram_is_explicit_and_queues_wordpress_restore(tmp_path):
         result = apply_command(connection, "restore-1", user["id"], "restore_telegram", {}, "test-admin")
         assert result["status"] == "queued"
         stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert stored["telegram_banned"] == 1
+        assert stored["telegram_ban_source"] == "admin"
+        assert connection.execute("SELECT kind FROM outbox_jobs").fetchone()[0] == "telegram.restore"
+
+
+def test_telegram_restore_unbans_sends_invite_and_clears_manual_ban(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.calls = []
+
+        async def unban_chat_member(self, chat_id, user_id):
+            self.calls.append(("unban", chat_id, user_id))
+
+        async def create_chat_invite_link(self, chat_id, **kwargs):
+            self.calls.append(("invite", chat_id, kwargs))
+            return {"invite_link": "https://t.me/+test"}
+
+        async def send_message(self, chat_id, text):
+            self.calls.append(("message", chat_id, text))
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, telegram_banned, telegram_ban_source) VALUES (?, 1, 'admin') RETURNING id",
+            (67,),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) VALUES (?, 'stripe', 'restore-sub-2', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        apply_command(connection, "restore-2", user["id"], "restore_telegram", {}, "test-admin")
+        result = asyncio.run(process_pending_telegram_restore_jobs(connection, telegram, "-100", dry_run=False))
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert result == {"processed": 1, "failed": 0, "skipped": 0}
         assert stored["telegram_banned"] == 0
         assert stored["telegram_ban_source"] is None
-        assert connection.execute("SELECT kind FROM outbox_jobs").fetchone()[0] == "site.restore"
+        assert [call[0] for call in telegram.calls] == ["unban", "invite", "message"]
         apply_command(connection, "allow-1", user["id"], "allow", {}, "test-admin")
         user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         assert effective_access(user, None) == "active"
