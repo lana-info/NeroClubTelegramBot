@@ -48,6 +48,15 @@ def test_start_update_is_idempotent(tmp_path):
     assert transport.calls[0]["reply_markup"]["keyboard"][0][0]["text"] == "📊 Статус подписки"
 
 
+def test_webhook_setup_subscribes_to_chat_member_updates():
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    assert asyncio.run(client.set_webhook("https://example.test/webhooks/telegram", "secret"))
+    assert transport.calls[0]["url"] == "https://example.test/webhooks/telegram"
+    assert transport.calls[0]["secret_token"] == "secret"
+    assert transport.calls[0]["allowed_updates"] == ["message", "chat_member"]
+
+
 def test_friendly_menu_button_is_mapped_to_command(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'menu.db'}")
     db.init_schema()
@@ -126,3 +135,108 @@ def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
         assert asyncio.run(process_update(connection, update, telegram, app_keys_encryption_key=encryption_key)) == "processed"
     assert "secret-value" in telegram_transport.calls[0]["text"]
     assert "30.09.2999" in telegram_transport.calls[0]["text"]
+
+
+def _chat_member_update(update_id, telegram_id, status, chat_id=-100):
+    return {
+        "update_id": update_id,
+        "chat_member": {
+            "chat": {"id": chat_id},
+            "new_chat_member": {"user": {"id": telegram_id}, "status": status},
+        },
+    }
+
+
+def test_chat_member_left_queues_wordpress_deactivation(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'membership-events.db'}")
+    db.init_schema()
+    client = TelegramClient("test-token", transport=TelegramTransport())
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_user_id) VALUES (?, ?) RETURNING id", (42, 9)
+        ).fetchone()
+        assert asyncio.run(process_update(
+            connection, _chat_member_update(100, 42, "left"), client, chat_id="-100"
+        )) == "processed"
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        job = connection.execute("SELECT kind, payload FROM outbox_jobs").fetchone()
+        assert stored["telegram_membership_status"] == "left"
+        assert stored["telegram_banned"] == 0
+        assert job["kind"] == "site.deactivate"
+        assert json.loads(job["payload"])["user_id"] == user["id"]
+
+
+def test_chat_member_return_restores_active_user_but_manual_ban_stays_blocked(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'membership-return.db'}")
+    db.init_schema()
+    client = TelegramClient("test-token", transport=TelegramTransport())
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_user_id, telegram_membership_status) VALUES (?, ?, 'left') RETURNING id",
+            (42, 9),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) VALUES (?, 'stripe', 'sub-1', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        assert asyncio.run(process_update(
+            connection, _chat_member_update(101, 42, "member"), client, chat_id=-100
+        )) == "processed"
+        assert connection.execute("SELECT kind FROM outbox_jobs").fetchall()[0][0] == "site.restore"
+
+        connection.execute(
+            "UPDATE users SET telegram_membership_status = 'left', telegram_banned = 1, telegram_ban_source = 'admin' WHERE id = ?",
+            (user["id"],),
+        )
+        assert asyncio.run(process_update(
+            connection, _chat_member_update(102, 42, "member"), client, chat_id=-100
+        )) == "processed"
+        assert connection.execute("SELECT COUNT(*) FROM outbox_jobs WHERE kind = 'site.restore'").fetchone()[0] == 1
+
+
+def test_chat_member_kicked_is_manual_and_duplicate_is_safe(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'membership-ban.db'}")
+    db.init_schema()
+    client = TelegramClient("test-token", transport=TelegramTransport())
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_user_id) VALUES (?, ?) RETURNING id", (42, 9)
+        ).fetchone()
+        update = _chat_member_update(103, 42, "kicked")
+        assert asyncio.run(process_update(connection, update, client, chat_id=-100)) == "processed"
+        assert asyncio.run(process_update(connection, update, client, chat_id=-100)) == "duplicate"
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert stored["telegram_banned"] == 1
+        assert stored["telegram_ban_source"] == "admin"
+        assert connection.execute("SELECT COUNT(*) FROM outbox_jobs").fetchone()[0] == 1
+
+
+def test_chat_member_system_kick_does_not_create_manual_ban_or_duplicate_job(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'membership-system-ban.db'}")
+    db.init_schema()
+    client = TelegramClient("test-token", transport=TelegramTransport())
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_user_id, telegram_ban_source) VALUES (?, ?, 'system') RETURNING id",
+            (42, 9),
+        ).fetchone()
+        update = _chat_member_update(106, 42, "kicked")
+        assert asyncio.run(process_update(connection, update, client, chat_id=-100)) == "processed"
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert stored["telegram_banned"] == 0
+        assert stored["telegram_ban_source"] == "system"
+        assert connection.execute("SELECT COUNT(*) FROM outbox_jobs").fetchone()[0] == 0
+
+
+def test_chat_member_ignores_unknown_or_wrong_chat(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'membership-ignore.db'}")
+    db.init_schema()
+    client = TelegramClient("test-token", transport=TelegramTransport())
+    with db.connect() as connection:
+        assert asyncio.run(process_update(
+            connection, _chat_member_update(104, 999, "kicked"), client, chat_id=-100
+        )) == "ignored"
+        assert asyncio.run(process_update(
+            connection, _chat_member_update(105, 999, "kicked", chat_id=-200), client, chat_id=-100
+        )) == "ignored"
+        assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0

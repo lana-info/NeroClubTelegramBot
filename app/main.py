@@ -59,8 +59,13 @@ def create_or_update_user(payload: dict[str, Any], _: str = Depends(require_admi
 async def setup_telegram_menu(_: str = Depends(require_admin)) -> dict[str, str]:
     if not settings.telegram_bot_token:
         raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
-    await TelegramClient(settings.telegram_bot_token).set_my_commands(BOT_COMMANDS)
-    return {"status": "configured"}
+    telegram = TelegramClient(settings.telegram_bot_token)
+    await telegram.set_my_commands(BOT_COMMANDS)
+    if settings.telegram_webhook_url:
+        if not settings.telegram_webhook_secret:
+            raise HTTPException(status_code=503, detail="TELEGRAM_WEBHOOK_SECRET is not configured")
+        await telegram.set_webhook(settings.telegram_webhook_url, settings.telegram_webhook_secret)
+    return {"status": "configured", "webhook": "configured" if settings.telegram_webhook_url else "unchanged"}
 
 
 @app.post("/internal/app-keys", status_code=201)

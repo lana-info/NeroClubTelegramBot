@@ -37,6 +37,16 @@ class TelegramClient:
     async def set_my_commands(self, commands: list[dict[str, str]]) -> Any:
         return await self.call("setMyCommands", {"commands": commands})
 
+    async def set_webhook(self, url: str, secret_token: str) -> Any:
+        return await self.call(
+            "setWebhook",
+            {
+                "url": url,
+                "secret_token": secret_token,
+                "allowed_updates": ["message", "chat_member"],
+            },
+        )
+
     async def create_chat_invite_link(
         self, chat_id: int | str, *, expire_date: int | None = None, creates_join_request: bool = True
     ) -> Any:

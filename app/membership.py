@@ -6,6 +6,7 @@ from typing import Any
 
 from .access import effective_access
 from .integrations.telegram import TelegramClient
+from .site_access import queue_site_access_job
 
 
 class MembershipError(RuntimeError):
@@ -61,15 +62,25 @@ async def reconcile_members(
             member = await telegram.get_chat_member(chat_id, user["telegram_id"])
             member_status = member.get("status") if isinstance(member, dict) else None
             access = effective_access(user, subscription)
+            db.execute(
+                "UPDATE users SET telegram_membership_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (member_status or "unknown", user["id"]),
+            )
             checked += 1
             if access == "active":
                 active += 1
+                if member_status == "left":
+                    queue_site_access_job(db, user["id"], "deactivate", f"reconcile-left-{user['id']}")
             else:
                 denied += 1
                 if member_status in {"member", "restricted", "administrator", "creator"}:
                     if dry_run:
                         would_remove += 1
                     else:
+                        db.execute(
+                            "UPDATE users SET telegram_ban_source = 'system', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                            (user["id"],),
+                        )
                         await telegram.ban_chat_member(chat_id, user["telegram_id"])
                         removed += 1
         except Exception:

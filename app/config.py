@@ -26,6 +26,7 @@ class Settings:
     grace_period_days: int = int(os.getenv("GRACE_PERIOD_DAYS", "3"))
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
+    telegram_webhook_url: str = os.getenv("TELEGRAM_WEBHOOK_URL", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
     admin_telegram_ids: tuple[int, ...] = _telegram_ids(os.getenv("ADMIN_TELEGRAM_IDS", ""))
     wordpress_base_url: str = os.getenv("WORDPRESS_BASE_URL", "").rstrip("/")

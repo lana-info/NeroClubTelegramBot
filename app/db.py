@@ -148,3 +148,9 @@ class Database:
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}
             if "wordpress_login" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN wordpress_login TEXT")
+            if "telegram_membership_status" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN telegram_membership_status TEXT NOT NULL DEFAULT 'unknown'")
+            if "telegram_banned" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN telegram_banned INTEGER NOT NULL DEFAULT 0")
+            if "telegram_ban_source" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN telegram_ban_source TEXT")

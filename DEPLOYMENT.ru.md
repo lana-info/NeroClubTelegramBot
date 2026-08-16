@@ -38,7 +38,8 @@
 5. В Stripe создать webhook для `/webhooks/stripe` и включить события
    подписки и оплаты, которые указаны в PRD.
 6. В Telegram установить webhook на HTTPS-адрес `/webhooks/telegram` и
-   один раз выполнить настройку меню команд.
+   один раз выполнить защищённую настройку меню команд. Эта настройка также
+   включает события `message` и `chat_member`.
 
 ## Безопасный первый запуск
 
@@ -50,7 +51,7 @@ cd /opt/bots-stack/nero-club
 docker compose up -d --build
 docker compose ps
 docker compose logs --tail=100 bot-backend
-   curl http://127.0.0.1:18080/health
+curl http://127.0.0.1:18080/health
 ```
 
 После проверки тестовым пользователем администратор меняет только

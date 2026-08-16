@@ -17,7 +17,7 @@ def parse_dt(value: str | None) -> datetime | None:
 
 
 def effective_access(user: sqlite3.Row, subscription: sqlite3.Row | None) -> str:
-    if user["access_override"] == "deny":
+    if user["access_override"] == "deny" or user["telegram_banned"]:
         return "denied"
     if user["whitelist"] or user["access_override"] == "allow":
         return "active"
@@ -77,7 +77,7 @@ def upsert_user(db: sqlite3.Connection, payload: dict[str, Any]) -> sqlite3.Row:
 def apply_command(
     db: sqlite3.Connection, command_id: str, user_id: int, action: str, payload: dict[str, Any], actor: str
 ) -> dict[str, Any]:
-    allowed = {"whitelist", "unwhitelist", "deny", "allow", "extend", "issue_credentials", "resend_delivery"}
+    allowed = {"whitelist", "unwhitelist", "deny", "allow", "extend", "restore_telegram", "issue_credentials", "resend_delivery"}
     if action not in allowed:
         raise ValueError(f"unsupported action: {action}")
     existing = db.execute(
@@ -104,6 +104,26 @@ def apply_command(
             (until, user_id),
         )
 
+    restore_queued = False
+    if action == "restore_telegram":
+        db.execute(
+            "UPDATE users SET telegram_banned = 0, telegram_ban_source = NULL, "
+            "telegram_membership_status = 'unknown', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (user_id,),
+        )
+        restored_user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+        subscription = db.execute(
+            "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
+        ).fetchone()
+        if effective_access(restored_user, subscription) == "active":
+            db.execute(
+                "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+                ("site.restore", f"sheets-telegram-restore-{command_id}", json.dumps({
+                    "command_id": command_id, "user_id": user_id, "action": action,
+                }, ensure_ascii=False)),
+            )
+            restore_queued = True
+
     if action in {"issue_credentials", "resend_delivery"}:
         db.execute(
             "INSERT INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
@@ -112,6 +132,9 @@ def apply_command(
             }, ensure_ascii=False)),
         )
         status = "queued"
+        result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
+    elif action == "restore_telegram":
+        status = "queued" if restore_queued else "done"
         result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
     else:
         status = "done"

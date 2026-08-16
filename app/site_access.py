@@ -14,6 +14,17 @@ class SiteAccessError(RuntimeError):
     pass
 
 
+def queue_site_access_job(
+    db: sqlite3.Connection, user_id: int, action: str, aggregate_key: str
+) -> None:
+    if action not in {"deactivate", "restore"}:
+        raise ValueError("unsupported site access action")
+    db.execute(
+        "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+        (f"site.{action}", aggregate_key, json.dumps({"user_id": user_id, "action": action})),
+    )
+
+
 async def issue_site_credentials(
     db: sqlite3.Connection,
     user_id: int,
@@ -66,38 +77,52 @@ async def process_pending_site_access_jobs(
     limit: int = 20,
 ) -> dict[str, int]:
     jobs = db.execute(
-        "SELECT id, aggregate_key, payload, attempts FROM outbox_jobs "
-        "WHERE kind = 'site.credentials' AND status = 'pending' ORDER BY id LIMIT ?",
+        "SELECT id, kind, aggregate_key, payload, attempts FROM outbox_jobs "
+        "WHERE kind IN ('site.credentials', 'site.deactivate', 'site.restore') "
+        "AND status = 'pending' ORDER BY id LIMIT ?",
         (limit,),
     ).fetchall()
     processed = failed = 0
     for job in jobs:
         payload = json.loads(job["payload"])
         try:
-            result = await issue_site_credentials(
-                db,
-                int(payload["user_id"]),
-                telegram,
-                wordpress,
-                # A retry may happen after WordPress accepted the password but
-                # Telegram lost its response. A fresh operation key lets the
-                # retry set and deliver the replacement password consistently.
-                idempotency_key=f"{job['aggregate_key']}-attempt-{job['attempts'] + 1}",
-            )
+            if job["kind"] == "site.credentials":
+                result = await issue_site_credentials(
+                    db,
+                    int(payload["user_id"]),
+                    telegram,
+                    wordpress,
+                    idempotency_key=f"{job['aggregate_key']}-attempt-{job['attempts'] + 1}",
+                )
+            else:
+                user = db.execute("SELECT * FROM users WHERE id = ?", (int(payload["user_id"]),)).fetchone()
+                if not user:
+                    raise SiteAccessError("user not found")
+                result = await wordpress.sync_user(
+                    {
+                        "action": payload["action"],
+                        "user_id": user["wordpress_user_id"] or 0,
+                        "username": user["wordpress_login"] or "",
+                        "email": user["wordpress_email"] or "",
+                    },
+                    f"{job['aggregate_key']}-attempt-{job['attempts'] + 1}",
+                )
             db.execute("UPDATE outbox_jobs SET status = 'done', processed_at = CURRENT_TIMESTAMP WHERE id = ?", (job["id"],))
-            db.execute(
-                "UPDATE sheets_commands SET status = 'done', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
-                (json.dumps(result, ensure_ascii=False), payload["command_id"]),
-            )
+            if payload.get("command_id"):
+                db.execute(
+                    "UPDATE sheets_commands SET status = 'done', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
+                    (json.dumps(result, ensure_ascii=False), payload["command_id"]),
+                )
             processed += 1
-        except (SiteAccessError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        except (SiteAccessError, WordPressError, ValueError, KeyError, json.JSONDecodeError) as exc:
             db.execute(
                 "UPDATE outbox_jobs SET status = 'failed', attempts = attempts + 1, last_error = ? WHERE id = ?",
                 (str(exc), job["id"]),
             )
-            db.execute(
-                "UPDATE sheets_commands SET status = 'error', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
-                (json.dumps({"error": str(exc)}, ensure_ascii=False), payload.get("command_id")),
-            )
+            if payload.get("command_id"):
+                db.execute(
+                    "UPDATE sheets_commands SET status = 'error', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
+                    (json.dumps({"error": str(exc)}, ensure_ascii=False), payload["command_id"]),
+                )
             failed += 1
     return {"processed": processed, "failed": failed}

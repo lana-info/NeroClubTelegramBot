@@ -8,6 +8,7 @@ from .access import effective_access, upsert_user
 from .integrations.telegram import TelegramClient
 from .integrations.wordpress import WordPressClient
 from .site_access import SiteAccessError, issue_site_credentials
+from .site_access import queue_site_access_job
 from .keys import AppKeyError, display_expiry, keys_for_user
 from .telegram_menu import REPLY_KEYBOARD, command_from_text
 from .telegram_menu import ADMIN_MENU_BUTTONS
@@ -35,6 +36,15 @@ async def process_update(
         )
     except sqlite3.IntegrityError:
         return "duplicate"
+
+    chat_member = update.get("chat_member")
+    if chat_member is not None:
+        return await _process_chat_member_update(
+            db,
+            update_id,
+            chat_member,
+            chat_id=chat_id,
+        )
 
     message = update.get("message") or {}
     sender = message.get("from") or {}
@@ -190,6 +200,78 @@ async def process_update(
             await telegram.send_message(message_chat_id, "Сообщение отправлено администратору.", reply_markup=REPLY_KEYBOARD)
     db.execute("UPDATE inbox_events SET processed_at = CURRENT_TIMESTAMP WHERE provider = 'telegram' AND external_event_id = ?", (str(update_id),))
     return "processed"
+
+
+async def _process_chat_member_update(
+    db: sqlite3.Connection,
+    update_id: int,
+    chat_member: dict[str, Any],
+    *,
+    chat_id: int | str | None,
+) -> str:
+    event_chat_id = (chat_member.get("chat") or {}).get("id")
+    if chat_id is not None and str(event_chat_id) != str(chat_id):
+        _mark_telegram_update_processed(db, update_id)
+        return "ignored"
+
+    new_member = chat_member.get("new_chat_member") or {}
+    member_user = new_member.get("user") or {}
+    telegram_id = member_user.get("id")
+    status = new_member.get("status")
+    if not isinstance(telegram_id, int) or status not in {
+        "left", "kicked", "member", "restricted", "administrator", "creator"
+    }:
+        _mark_telegram_update_processed(db, update_id)
+        return "ignored"
+
+    user = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+    if not user:
+        _mark_telegram_update_processed(db, update_id)
+        return "ignored"
+
+    previous_status = user["telegram_membership_status"]
+    ban_source = user["telegram_ban_source"]
+    if status == "kicked":
+        if ban_source != "system":
+            db.execute(
+                "UPDATE users SET telegram_membership_status = 'kicked', telegram_banned = 1, "
+                "telegram_ban_source = 'admin', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (user["id"],),
+            )
+            queue_site_access_job(db, user["id"], "deactivate", f"telegram-kicked-{update_id}")
+        else:
+            db.execute(
+                "UPDATE users SET telegram_membership_status = 'kicked', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (user["id"],),
+            )
+    elif status == "left":
+        db.execute(
+            "UPDATE users SET telegram_membership_status = 'left', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (user["id"],),
+        )
+        queue_site_access_job(db, user["id"], "deactivate", f"telegram-left-{update_id}")
+    else:
+        db.execute(
+            "UPDATE users SET telegram_membership_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (status, user["id"]),
+        )
+        if previous_status == "left" and not user["telegram_banned"]:
+            subscription = db.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
+            ).fetchone()
+            if effective_access(user, subscription) == "active":
+                queue_site_access_job(db, user["id"], "restore", f"telegram-restore-{update_id}")
+
+    _mark_telegram_update_processed(db, update_id)
+    return "processed"
+
+
+def _mark_telegram_update_processed(db: sqlite3.Connection, update_id: int) -> None:
+    db.execute(
+        "UPDATE inbox_events SET processed_at = CURRENT_TIMESTAMP "
+        "WHERE provider = 'telegram' AND external_event_id = ?",
+        (str(update_id),),
+    )
 
 
 def _create_support_request(db: sqlite3.Connection, user_id: int, message_text: str) -> int:

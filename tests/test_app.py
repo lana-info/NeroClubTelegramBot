@@ -10,7 +10,7 @@ from app.db import Database
 from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
-from app.site_access import process_pending_site_access_jobs
+from app.site_access import process_pending_site_access_jobs, queue_site_access_job
 from app.membership import create_personal_invite, reconcile_members
 from app.reminders import send_subscription_reminders
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows
@@ -155,6 +155,24 @@ def test_membership_reconciliation_is_safe_in_dry_run(tmp_path):
         assert asyncio.run(create_personal_invite(connection, active["id"], FakeTelegram(), "-100", dry_run=True))["status"] == "dry_run"
 
 
+def test_reconciliation_marks_automatic_ban_as_system_ban(tmp_path):
+    class FakeTelegram:
+        async def get_chat_member(self, chat_id, user_id):
+            return {"status": "member"}
+
+        async def ban_chat_member(self, chat_id, user_id):
+            return {"status": "ok"}
+
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 3})
+        result = asyncio.run(reconcile_members(connection, FakeTelegram(), "-100", dry_run=False))
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert result["removed"] == 1
+        assert stored["telegram_ban_source"] == "system"
+        assert stored["telegram_banned"] == 0
+
+
 def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
     class FakeTelegram:
         def __init__(self):
@@ -185,6 +203,74 @@ def test_access_override_and_whitelist(tmp_path):
     with db.connect() as connection:
         user = upsert_user(connection, {"telegram_id": 789})
         assert effective_access(user, None) == "denied"
+
+
+def test_site_membership_jobs_call_restore_and_deactivate(tmp_path):
+    class FakeTelegram:
+        async def send_message(self, *args, **kwargs):
+            raise AssertionError("membership jobs must not message users")
+
+    class FakeWordPress:
+        def __init__(self):
+            self.actions = []
+
+        async def sync_user(self, payload, idempotency_key):
+            self.actions.append((payload, idempotency_key))
+            return {"user_id": 9, "login": "anna", "action": payload["action"]}
+
+    db = database(tmp_path)
+    wordpress = FakeWordPress()
+    with db.connect() as connection:
+        user = upsert_user(connection, {
+            "telegram_id": 55, "wordpress_user_id": 9, "wordpress_email": "anna@example.com",
+        })
+        queue_site_access_job(connection, user["id"], "deactivate", "event-left")
+        queue_site_access_job(connection, user["id"], "restore", "event-return")
+        result = asyncio.run(process_pending_site_access_jobs(connection, FakeTelegram(), wordpress))
+        assert result == {"processed": 2, "failed": 0}
+    assert [item[0]["action"] for item in wordpress.actions] == ["deactivate", "restore"]
+
+
+def test_site_membership_job_keeps_retry_state_on_wordpress_error(tmp_path):
+    from app.integrations.wordpress import WordPressError
+
+    class FakeTelegram:
+        async def send_message(self, *args, **kwargs):
+            raise AssertionError("membership jobs must not message users")
+
+    class FailingWordPress:
+        async def sync_user(self, payload, idempotency_key):
+            raise WordPressError("temporary failure")
+
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 56, "wordpress_user_id": 10})
+        queue_site_access_job(connection, user["id"], "deactivate", "event-failure")
+        result = asyncio.run(process_pending_site_access_jobs(connection, FakeTelegram(), FailingWordPress()))
+        job = connection.execute("SELECT status, attempts, last_error FROM outbox_jobs").fetchone()
+        assert result == {"processed": 0, "failed": 1}
+        assert job["status"] == "failed"
+        assert job["attempts"] == 1
+        assert "temporary failure" in job["last_error"]
+
+
+def test_restore_telegram_is_explicit_and_queues_wordpress_restore(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_user_id, telegram_banned, telegram_ban_source) VALUES (?, ?, 1, 'admin') RETURNING id",
+            (66, 9),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) VALUES (?, 'stripe', 'restore-sub', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        result = apply_command(connection, "restore-1", user["id"], "restore_telegram", {}, "test-admin")
+        assert result["status"] == "queued"
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert stored["telegram_banned"] == 0
+        assert stored["telegram_ban_source"] is None
+        assert connection.execute("SELECT kind FROM outbox_jobs").fetchone()[0] == "site.restore"
         apply_command(connection, "allow-1", user["id"], "allow", {}, "test-admin")
         user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         assert effective_access(user, None) == "active"

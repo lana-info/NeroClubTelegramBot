@@ -18,6 +18,8 @@ The first vertical slice contains:
 - Stripe webhook signature verification and duplicate-event protection;
 - Stripe inbox/outbox worker for idempotent subscription-state updates;
 - Telegram webhook with `/start`, `/status` and `/help`, including `update_id` deduplication;
+- Telegram `chat_member` handling: ordinary leave queues WordPress deactivation,
+  administrator ban is preserved until an explicit restore action;
 - `/site-access` flow for active subscribers: permanent WordPress credentials are delivered privately and never stored;
 - `/my-keys` flow for active subscribers: assigned application keys are delivered privately with their expiry date;
 - persistent Telegram user menu and admin-only support inbox;
@@ -66,7 +68,9 @@ Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports 
 
 Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. Users can choose `💬 Связаться с администратором`; administrators receive the request and answer with `/reply REQUEST_ID TEXT`.
 
-After configuring `TELEGRAM_BOT_TOKEN`, call the protected `/internal/telegram/setup-menu` endpoint once to publish the command list in Telegram's bot menu.
+After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_URL`, call the protected
+`/internal/telegram/setup-menu` endpoint once. It publishes the command list and
+sets Telegram `allowed_updates` to `message` and `chat_member`.
 
 To connect the tab, copy `google-apps-script/KeysSync.gs` into Extensions → Apps Script for this spreadsheet. Set Script Properties `BACKEND_URL` and `ADMIN_API_TOKEN`, run `installKeySyncTrigger()` once, then run `syncAllKeys()`. The script checks the tab every five minutes and writes only a safe status to `last_result`.
 
