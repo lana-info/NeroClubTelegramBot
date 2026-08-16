@@ -284,7 +284,7 @@ async def process_site_access_jobs(_: str = Depends(require_admin)) -> dict[str,
     telegram = TelegramClient(settings.telegram_bot_token)
     wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
     with db.connect() as connection:
-        return await process_pending_site_access_jobs(connection, telegram, wordpress)
+        return await process_pending_site_access_jobs(connection, telegram, wordpress, dry_run=settings.dry_run)
 
 
 @app.get("/internal/sheets/preview")

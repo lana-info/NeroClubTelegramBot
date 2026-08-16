@@ -75,6 +75,7 @@ async def process_pending_site_access_jobs(
     wordpress: WordPressClient,
     *,
     limit: int = 20,
+    dry_run: bool = False,
 ) -> dict[str, int]:
     jobs = db.execute(
         "SELECT id, kind, aggregate_key, payload, attempts FROM outbox_jobs "
@@ -82,6 +83,8 @@ async def process_pending_site_access_jobs(
         "AND status = 'pending' ORDER BY id LIMIT ?",
         (limit,),
     ).fetchall()
+    if dry_run:
+        return {"processed": 0, "failed": 0, "skipped": len(jobs)}
     processed = failed = 0
     for job in jobs:
         payload = json.loads(job["payload"])

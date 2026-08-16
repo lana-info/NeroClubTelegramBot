@@ -311,6 +311,26 @@ def test_site_membership_job_keeps_retry_state_on_wordpress_error(tmp_path):
         assert "temporary failure" in job["last_error"]
 
 
+def test_site_access_worker_dry_run_does_not_call_wordpress(tmp_path):
+    class FakeTelegram:
+        async def send_message(self, *args, **kwargs):
+            raise AssertionError("dry-run must not deliver site credentials")
+
+    class FailingWordPress:
+        async def sync_user(self, *args, **kwargs):
+            raise AssertionError("dry-run must not call WordPress")
+
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 57, "wordpress_user_id": 11})
+        queue_site_access_job(connection, user["id"], "deactivate", "dry-run-deactivate")
+        result = asyncio.run(process_pending_site_access_jobs(
+            connection, FakeTelegram(), FailingWordPress(), dry_run=True
+        ))
+        assert result == {"processed": 0, "failed": 0, "skipped": 1}
+        assert connection.execute("SELECT status FROM outbox_jobs").fetchone()[0] == "pending"
+
+
 def test_restore_telegram_is_explicit_and_queues_wordpress_restore(tmp_path):
     db = database(tmp_path)
     with db.connect() as connection:
