@@ -408,6 +408,12 @@ def test_telegram_restore_unbans_sends_invite_and_clears_manual_ban(tmp_path):
         assert stored["telegram_banned"] == 0
         assert stored["telegram_ban_source"] is None
         assert [call[0] for call in telegram.calls] == ["unban", "invite", "message"]
+        apply_command(connection, "allow-1", user["id"], "allow", {}, "test-admin")
+        user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert effective_access(user, None) == "active"
+        apply_command(connection, "deny-1", user["id"], "deny", {}, "test-admin")
+        user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert effective_access(user, None) == "denied"
 
 
 def test_telegram_restore_unbans_and_invites_in_special_channel(tmp_path):
@@ -449,12 +455,6 @@ def test_telegram_restore_unbans_and_invites_in_special_channel(tmp_path):
         assert telegram.calls[4][0] == "message"
         assert "https://t.me/+-100" in telegram.calls[4][2]
         assert "https://t.me/+-200" in telegram.calls[4][2]
-        apply_command(connection, "allow-1", user["id"], "allow", {}, "test-admin")
-        user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-        assert effective_access(user, None) == "active"
-        apply_command(connection, "deny-1", user["id"], "deny", {}, "test-admin")
-        user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
-        assert effective_access(user, None) == "denied"
 
 
 def test_stripe_signature_and_event_validation():

@@ -153,7 +153,7 @@ async def process_pending_telegram_restore_jobs(
             if payload.get("command_id"):
                 db.execute(
                     "UPDATE sheets_commands SET status = 'done', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
-                        (json.dumps({"invite_links_sent": len(invite_links)}, ensure_ascii=False), payload["command_id"]),
+                    (json.dumps({"invite_links_sent": len(invite_links)}, ensure_ascii=False), payload["command_id"]),
                 )
             processed += 1
         except (MembershipError, ValueError, KeyError, json.JSONDecodeError, TelegramError) as exc:
