@@ -269,7 +269,11 @@ async def process_telegram_restores(_: str = Depends(require_admin)) -> dict[str
     telegram = TelegramClient(settings.telegram_bot_token)
     with db.connect() as connection:
         return await process_pending_telegram_restore_jobs(
-            connection, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
+            connection,
+            telegram,
+            settings.telegram_chat_id,
+            additional_chat_ids=((settings.telegram_channel_id,) if settings.telegram_channel_id else ()),
+            dry_run=settings.dry_run,
         )
 
 

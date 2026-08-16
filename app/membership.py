@@ -97,6 +97,7 @@ async def process_pending_telegram_restore_jobs(
     telegram: TelegramClient,
     chat_id: int | str,
     *,
+    additional_chat_ids: tuple[int | str, ...] = (),
     dry_run: bool,
     limit: int = 20,
 ) -> dict[str, int]:
@@ -122,18 +123,26 @@ async def process_pending_telegram_restore_jobs(
             if effective_access(db.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone(), subscription) != "active":
                 db.execute("UPDATE users SET telegram_banned = 1 WHERE id = ?", (user["id"],))
                 raise MembershipError("restore requires active access")
-            await telegram.unban_chat_member(chat_id, user["telegram_id"])
-            invite_result = await telegram.create_chat_invite_link(
-                chat_id,
-                expire_date=int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
-                creates_join_request=True,
-            )
-            invite_link = invite_result.get("invite_link") if isinstance(invite_result, dict) else None
-            if not invite_link:
-                raise MembershipError("Telegram returned no invite link")
+            chat_ids = [chat_id]
+            for additional_chat_id in additional_chat_ids:
+                if additional_chat_id not in chat_ids:
+                    chat_ids.append(additional_chat_id)
+            invite_links = []
+            for target_chat_id in chat_ids:
+                await telegram.unban_chat_member(target_chat_id, user["telegram_id"])
+                invite_result = await telegram.create_chat_invite_link(
+                    target_chat_id,
+                    expire_date=int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+                    creates_join_request=True,
+                )
+                invite_link = invite_result.get("invite_link") if isinstance(invite_result, dict) else None
+                if not invite_link:
+                    raise MembershipError("Telegram returned no invite link")
+                invite_links.append(invite_link)
             await telegram.send_message(
                 user["telegram_id"],
-                "Вас разблокировали. Используйте новую ссылку для вступления:\n" + invite_link,
+                "Вас разблокировали. Используйте новые ссылки для вступления:\n"
+                + "\n".join(invite_links),
             )
             db.execute(
                 "UPDATE users SET telegram_banned = 0, telegram_ban_source = NULL, "
@@ -144,7 +153,7 @@ async def process_pending_telegram_restore_jobs(
             if payload.get("command_id"):
                 db.execute(
                     "UPDATE sheets_commands SET status = 'done', result = ?, completed_at = CURRENT_TIMESTAMP WHERE command_id = ?",
-                    (json.dumps({"invite_link_sent": True}, ensure_ascii=False), payload["command_id"]),
+                        (json.dumps({"invite_links_sent": len(invite_links)}, ensure_ascii=False), payload["command_id"]),
                 )
             processed += 1
         except (MembershipError, ValueError, KeyError, json.JSONDecodeError, TelegramError) as exc:

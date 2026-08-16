@@ -408,6 +408,47 @@ def test_telegram_restore_unbans_sends_invite_and_clears_manual_ban(tmp_path):
         assert stored["telegram_banned"] == 0
         assert stored["telegram_ban_source"] is None
         assert [call[0] for call in telegram.calls] == ["unban", "invite", "message"]
+
+
+def test_telegram_restore_unbans_and_invites_in_special_channel(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.calls = []
+
+        async def unban_chat_member(self, chat_id, user_id):
+            self.calls.append(("unban", chat_id, user_id))
+
+        async def create_chat_invite_link(self, chat_id, **kwargs):
+            self.calls.append(("invite", chat_id, kwargs))
+            return {"invite_link": f"https://t.me/+{chat_id}"}
+
+        async def send_message(self, chat_id, text):
+            self.calls.append(("message", chat_id, text))
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, telegram_banned, telegram_ban_source) VALUES (?, 1, 'admin') RETURNING id",
+            (88,),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub-restore-channel', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        apply_command(connection, "restore-channel", user["id"], "restore_telegram", {}, "test-admin")
+        result = asyncio.run(process_pending_telegram_restore_jobs(
+            connection, telegram, "-100", additional_chat_ids=("-200",), dry_run=False
+        ))
+
+        assert result["processed"] == 1
+        assert [(call[0], call[1]) for call in telegram.calls[:4]] == [
+            ("unban", "-100"), ("invite", "-100"), ("unban", "-200"), ("invite", "-200")
+        ]
+        assert telegram.calls[4][0] == "message"
+        assert "https://t.me/+-100" in telegram.calls[4][2]
+        assert "https://t.me/+-200" in telegram.calls[4][2]
         apply_command(connection, "allow-1", user["id"], "allow", {}, "test-admin")
         user = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         assert effective_access(user, None) == "active"
