@@ -2,6 +2,10 @@
 
 Self-hosted backend for a paid Telegram community with WordPress access control and Google Sheets as an administration dashboard.
 
+Для владельца проекта начните с [START-HERE.ru.md](START-HERE.ru.md): там
+описано, как безопасно проверить систему на отдельном Telegram-чате, где брать
+настройки и что не нужно делать самостоятельно.
+
 ## Current implementation
 
 The first vertical slice contains:
