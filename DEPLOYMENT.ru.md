@@ -24,7 +24,8 @@
 2. Создать закрытый файл
    `/opt/bots-stack/secrets/nero_club.env` с настройками из `.env.example`.
    Права файла: только владелец-системный администратор.
-3. В `nero_club.env` указать Telegram-токен, ID чата, Telegram secret,
+3. В `nero_club.env` указать Telegram-токен, ID чата и, если используется,
+   ID специального канала (`TELEGRAM_CHANNEL_ID`), Telegram secret,
    Stripe secret и webhook secret, WordPress URL и shared secret,
    `ADMIN_API_TOKEN`, `APP_KEYS_ENCRYPTION_KEY`, ID администратора и ссылку
    оплаты.

@@ -198,8 +198,13 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
         if settings.wordpress_base_url and settings.wordpress_shared_secret:
             wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
         with db.connect() as connection:
+            telegram_chat_ids = tuple(
+                chat_id
+                for chat_id in (settings.telegram_chat_id, settings.telegram_channel_id)
+                if chat_id
+            )
             result = await process_update(
-                connection, update, telegram, chat_id=settings.telegram_chat_id,
+                connection, update, telegram, chat_id=telegram_chat_ids,
                 wordpress=wordpress,
                 app_keys_encryption_key=settings.app_keys_encryption_key,
                 admin_telegram_ids=settings.admin_telegram_ids,
@@ -244,9 +249,17 @@ async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
         raise HTTPException(status_code=503, detail="Telegram chat integration is not configured")
     telegram = TelegramClient(settings.telegram_bot_token)
     with db.connect() as connection:
-        return await reconcile_members(
-            connection, telegram, settings.telegram_chat_id, dry_run=settings.dry_run
-        )
+        chat_ids = [settings.telegram_chat_id]
+        if settings.telegram_channel_id and settings.telegram_channel_id not in chat_ids:
+            chat_ids.append(settings.telegram_channel_id)
+        totals = {"checked": 0, "active": 0, "denied": 0, "removed": 0, "would_remove": 0, "failed": 0}
+        for chat_id in chat_ids:
+            result = await reconcile_members(
+                connection, telegram, chat_id, dry_run=settings.dry_run
+            )
+            for key in totals:
+                totals[key] += result[key]
+        return totals
 
 
 @app.post("/internal/jobs/process-telegram-restores")

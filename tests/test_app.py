@@ -230,6 +230,31 @@ def test_reconciliation_marks_automatic_ban_as_system_ban(tmp_path):
         assert stored["telegram_banned"] == 0
 
 
+def test_reconciliation_can_check_the_special_channel(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.checked = []
+            self.banned = []
+
+        async def get_chat_member(self, chat_id, user_id):
+            self.checked.append((chat_id, user_id))
+            return {"status": "member"}
+
+        async def ban_chat_member(self, chat_id, user_id):
+            self.banned.append((chat_id, user_id))
+            return {"status": "ok"}
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 77})
+        result = asyncio.run(reconcile_members(connection, telegram, "-100777", dry_run=False))
+
+        assert result["removed"] == 1
+        assert telegram.checked == [("-100777", 77)]
+        assert telegram.banned == [("-100777", 77)]
+
+
 def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
     class FakeTelegram:
         def __init__(self):

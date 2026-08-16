@@ -187,6 +187,8 @@ Verification:
 
 Current implementation note:
 - обработка `chat_member` для `left` и `kicked` добавлена;
+- ежедневная сверка поддерживает основной чат и отдельный канал через
+  `TELEGRAM_CHANNEL_ID`;
 - ручной бан сохраняется отдельно и снимается действием `restore_telegram`;
 - production-проверка на отдельной тестовой группе ещё обязательна.
 

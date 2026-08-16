@@ -28,6 +28,7 @@ class Settings:
     telegram_webhook_secret: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")
     telegram_webhook_url: str = os.getenv("TELEGRAM_WEBHOOK_URL", "")
     telegram_chat_id: str = os.getenv("TELEGRAM_CHAT_ID", "")
+    telegram_channel_id: str = os.getenv("TELEGRAM_CHANNEL_ID", "")
     admin_telegram_ids: tuple[int, ...] = _telegram_ids(os.getenv("ADMIN_TELEGRAM_IDS", ""))
     wordpress_base_url: str = os.getenv("WORDPRESS_BASE_URL", "").rstrip("/")
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")

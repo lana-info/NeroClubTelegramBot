@@ -240,3 +240,21 @@ def test_chat_member_ignores_unknown_or_wrong_chat(tmp_path):
             connection, _chat_member_update(105, 999, "kicked", chat_id=-200), client, chat_id=-100
         )) == "ignored"
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 0
+
+
+def test_chat_member_event_is_accepted_for_special_channel(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'membership-channel.db'}")
+    db.init_schema()
+    client = TelegramClient("test-token", transport=TelegramTransport())
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_user_id) VALUES (?, ?) RETURNING id", (42, 9)
+        ).fetchone()
+        assert asyncio.run(process_update(
+            connection,
+            _chat_member_update(107, 42, "left", chat_id=-200),
+            client,
+            chat_id=("-100", "-200"),
+        )) == "processed"
+        stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
+        assert stored["telegram_membership_status"] == "left"

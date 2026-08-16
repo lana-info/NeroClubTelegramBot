@@ -19,7 +19,7 @@ async def process_update(
     update: dict[str, Any],
     telegram: TelegramClient,
     *,
-    chat_id: int | str | None = None,
+    chat_id: int | str | tuple[int | str, ...] | None = None,
     wordpress: WordPressClient | None = None,
     app_keys_encryption_key: str = "",
     admin_telegram_ids: tuple[int, ...] = (),
@@ -207,10 +207,11 @@ async def _process_chat_member_update(
     update_id: int,
     chat_member: dict[str, Any],
     *,
-    chat_id: int | str | None,
+    chat_id: int | str | tuple[int | str, ...] | None,
 ) -> str:
     event_chat_id = (chat_member.get("chat") or {}).get("id")
-    if chat_id is not None and str(event_chat_id) != str(chat_id):
+    allowed_chat_ids = chat_id if isinstance(chat_id, tuple) else (chat_id,)
+    if chat_id is not None and not any(str(event_chat_id) == str(allowed) for allowed in allowed_chat_ids):
         _mark_telegram_update_processed(db, update_id)
         return "ignored"
 
