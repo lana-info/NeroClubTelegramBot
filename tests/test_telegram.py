@@ -1,5 +1,6 @@
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from cryptography.fernet import Fernet
@@ -54,7 +55,7 @@ def test_webhook_setup_subscribes_to_chat_member_updates():
     assert asyncio.run(client.set_webhook("https://example.test/webhooks/telegram", "secret"))
     assert transport.calls[0]["url"] == "https://example.test/webhooks/telegram"
     assert transport.calls[0]["secret_token"] == "secret"
-    assert transport.calls[0]["allowed_updates"] == ["message", "chat_member"]
+    assert transport.calls[0]["allowed_updates"] == ["message", "chat_member", "chat_join_request"]
 
 
 def test_friendly_menu_button_is_mapped_to_command(tmp_path):
@@ -258,3 +259,35 @@ def test_chat_member_event_is_accepted_for_special_channel(tmp_path):
         )) == "processed"
         stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         assert stored["telegram_membership_status"] == "left"
+
+
+def test_join_request_is_approved_only_for_matching_active_invite(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'join-request.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id) VALUES (?) RETURNING id", (42,)
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub-join', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        connection.execute(
+            "INSERT INTO telegram_invites(user_id, chat_id, invite_link, expires_at) VALUES (?, '-100', ?, ?)",
+            (user["id"], "https://t.me/+expected", (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()),
+        )
+        update = {
+            "update_id": 108,
+            "chat_join_request": {
+                "chat": {"id": -100},
+                "from": {"id": 42},
+                "invite_link": {"invite_link": "https://t.me/+expected"},
+            },
+        }
+        assert asyncio.run(process_update(connection, update, client, chat_id=("-100",))) == "approved"
+        assert connection.execute("SELECT status FROM telegram_invites").fetchone()[0] == "used"
+        assert transport.calls[0]["chat_id"] == -100
+        assert transport.calls[0]["user_id"] == 42

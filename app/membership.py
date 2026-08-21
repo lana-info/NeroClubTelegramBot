@@ -40,10 +40,173 @@ async def create_personal_invite(
     if not link:
         raise MembershipError("Telegram returned no invite link")
     db.execute(
+        "INSERT OR IGNORE INTO telegram_invites(user_id, chat_id, invite_link, expires_at) VALUES (?, ?, ?, ?)",
+        (user_id, str(chat_id), link, datetime.fromtimestamp(expire_date, timezone.utc).isoformat()),
+    )
+    db.execute(
         "INSERT INTO audit_log(actor, action, user_id, details) VALUES (?, ?, ?, ?)",
         ("telegram", "telegram.invite_created", user_id, "personal join-request invite created"),
     )
     return {"user_id": user_id, "status": "created", "invite_link": link, "expires_in_minutes": 15}
+
+
+def _active_member_status(status: str | None) -> bool:
+    return status in {"member", "restricted", "administrator", "creator"}
+
+
+async def process_pending_telegram_invite_jobs(
+    db: sqlite3.Connection,
+    telegram: TelegramClient,
+    chat_ids: tuple[int | str, ...],
+    *,
+    dry_run: bool,
+    limit: int = 20,
+) -> dict[str, int]:
+    jobs = db.execute(
+        "SELECT id, aggregate_key, payload FROM outbox_jobs "
+        "WHERE kind = 'telegram.invite' AND status = 'pending' ORDER BY id LIMIT ?",
+        (limit,),
+    ).fetchall()
+    if dry_run:
+        return {"processed": 0, "failed": 0, "skipped": len(jobs)}
+    processed = failed = 0
+    for job in jobs:
+        payload = json.loads(job["payload"])
+        try:
+            user = db.execute("SELECT * FROM users WHERE id = ?", (int(payload["user_id"]),)).fetchone()
+            if not user:
+                raise MembershipError("user not found")
+            subscription = db.execute(
+                "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
+            ).fetchone()
+            if effective_access(user, subscription) != "active":
+                raise MembershipError("invite requires active access")
+            links = []
+            expire_date = int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp())
+            for target_chat_id in chat_ids:
+                member = await telegram.get_chat_member(target_chat_id, user["telegram_id"])
+                member_status = member.get("status") if isinstance(member, dict) else None
+                if _active_member_status(member_status):
+                    continue
+                result = await telegram.create_chat_invite_link(
+                    target_chat_id, expire_date=expire_date, creates_join_request=True
+                )
+                link = result.get("invite_link") if isinstance(result, dict) else None
+                if not link:
+                    raise MembershipError("Telegram returned no invite link")
+                db.execute(
+                    "INSERT OR IGNORE INTO telegram_invites(user_id, chat_id, invite_link, expires_at) VALUES (?, ?, ?, ?)",
+                    (user["id"], str(target_chat_id), link, datetime.fromtimestamp(expire_date, timezone.utc).isoformat()),
+                )
+                links.append(link)
+            if links:
+                await telegram.send_message(
+                    user["telegram_id"],
+                    "Оплата подтверждена. Используйте персональную ссылку для вступления:\n"
+                    + "\n".join(links),
+                )
+            db.execute(
+                "UPDATE outbox_jobs SET status = 'done', processed_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (job["id"],),
+            )
+            processed += 1
+        except (MembershipError, TelegramError, ValueError, KeyError, json.JSONDecodeError) as exc:
+            db.execute(
+                "UPDATE outbox_jobs SET status = 'failed', attempts = attempts + 1, last_error = ? WHERE id = ?",
+                (str(exc), job["id"]),
+            )
+            failed += 1
+    return {"processed": processed, "failed": failed, "skipped": 0}
+
+
+async def process_telegram_join_request(
+    db: sqlite3.Connection,
+    telegram: TelegramClient,
+    update_id: int,
+    join_request: dict[str, Any],
+    *,
+    allowed_chat_ids: tuple[int | str, ...],
+) -> str:
+    event_chat_id = (join_request.get("chat") or {}).get("id")
+    if not any(str(event_chat_id) == str(target) for target in allowed_chat_ids):
+        _mark_update_processed(db, update_id)
+        return "ignored"
+    applicant = (join_request.get("from") or {}).get("id")
+    invite_link = ((join_request.get("invite_link") or {}).get("invite_link"))
+    if not isinstance(applicant, int) or not isinstance(invite_link, str):
+        _mark_update_processed(db, update_id)
+        return "ignored"
+    invite = db.execute(
+        "SELECT ti.*, u.telegram_id FROM telegram_invites ti JOIN users u ON u.id = ti.user_id "
+        "WHERE ti.chat_id = ? AND ti.invite_link = ? AND ti.status = 'pending'",
+        (str(event_chat_id), invite_link),
+    ).fetchone()
+    expires_at = parse_invite_expiry(invite["expires_at"]) if invite else None
+    if not invite or invite["telegram_id"] != applicant or not expires_at or expires_at <= datetime.now(timezone.utc):
+        await telegram.decline_chat_join_request(event_chat_id, applicant)
+        if invite:
+            db.execute("UPDATE telegram_invites SET status = 'expired' WHERE id = ?", (invite["id"],))
+        _mark_update_processed(db, update_id)
+        return "declined"
+    user = db.execute("SELECT * FROM users WHERE id = ?", (invite["user_id"],)).fetchone()
+    subscription = db.execute(
+        "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (invite["user_id"],)
+    ).fetchone()
+    if effective_access(user, subscription) != "active":
+        await telegram.decline_chat_join_request(event_chat_id, applicant)
+        db.execute("UPDATE telegram_invites SET status = 'expired' WHERE id = ?", (invite["id"],))
+        _mark_update_processed(db, update_id)
+        return "declined"
+    await telegram.approve_chat_join_request(event_chat_id, applicant)
+    db.execute(
+        "UPDATE telegram_invites SET status = 'used', used_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (invite["id"],),
+    )
+    db.execute(
+        "UPDATE users SET telegram_membership_status = 'member', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (invite["user_id"],),
+    )
+    _mark_update_processed(db, update_id)
+    return "approved"
+
+
+def parse_invite_expiry(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _mark_update_processed(db: sqlite3.Connection, update_id: int) -> None:
+    db.execute(
+        "UPDATE inbox_events SET processed_at = CURRENT_TIMESTAMP WHERE provider = 'telegram' AND external_event_id = ?",
+        (str(update_id),),
+    )
+
+
+async def revoke_expired_telegram_invites(
+    db: sqlite3.Connection,
+    telegram: TelegramClient,
+    *,
+    dry_run: bool,
+    limit: int = 100,
+) -> dict[str, int]:
+    invites = db.execute(
+        "SELECT id, chat_id, invite_link, expires_at FROM telegram_invites WHERE status = 'pending' "
+        "ORDER BY id LIMIT ?", (limit,)
+    ).fetchall()
+    now = datetime.now(timezone.utc)
+    invites = [invite for invite in invites if (parse_invite_expiry(invite["expires_at"]) or now) <= now]
+    if dry_run:
+        return {"revoked": 0, "would_revoke": len(invites), "failed": 0}
+    revoked = failed = 0
+    for invite in invites:
+        try:
+            await telegram.revoke_chat_invite_link(invite["chat_id"], invite["invite_link"])
+            db.execute("UPDATE telegram_invites SET status = 'expired' WHERE id = ?", (invite["id"],))
+            revoked += 1
+        except TelegramError:
+            failed += 1
+    return {"revoked": revoked, "would_revoke": 0, "failed": failed}
 
 
 async def reconcile_members(

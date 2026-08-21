@@ -3,6 +3,7 @@ import hmac
 import json
 import time
 import asyncio
+import httpx
 from datetime import datetime
 
 from app.access import apply_command, effective_access, upsert_user
@@ -11,7 +12,13 @@ from app.webhooks import parse_event, verify_stripe_signature
 from app.stripe_events import apply_stripe_event, process_pending_stripe_events
 from app.dashboard import rows_as_csv, rows_for_dashboard
 from app.site_access import process_pending_site_access_jobs, queue_site_access_job
-from app.membership import create_personal_invite, process_pending_telegram_restore_jobs, reconcile_members
+from app.membership import (
+    create_personal_invite,
+    process_pending_telegram_invite_jobs,
+    process_pending_telegram_restore_jobs,
+    reconcile_members,
+)
+from app.stripe_checkout import create_checkout_session
 from app.reminders import send_subscription_reminders
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows
 from app.sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
@@ -491,6 +498,88 @@ def test_stripe_event_updates_subscription_and_is_safe_when_replayed(tmp_path):
         subscription = connection.execute("SELECT * FROM subscriptions").fetchall()
         assert len(subscription) == 1
         assert subscription[0]["payment_status"] == "paid"
+        assert connection.execute("SELECT kind FROM outbox_jobs").fetchone()[0] == "telegram.invite"
+
+
+def test_stripe_checkout_session_contains_internal_user_metadata():
+    requests = []
+
+    async def handler(request):
+        requests.append(request)
+        return httpx.Response(200, json={"id": "cs_test", "url": "https://checkout.test/cs_test"}, request=request)
+
+    session = asyncio.run(create_checkout_session(
+        "sk_test", "price_test", 42,
+        success_url="https://example.test/success",
+        cancel_url="https://example.test/cancel",
+        customer_email="anna@example.com",
+        transport=httpx.MockTransport(handler),
+    ))
+    assert session["url"].endswith("cs_test")
+    body = requests[0].content.decode()
+    assert "metadata%5Binternal_user_id%5D=42" in body
+    assert "subscription_data%5Bmetadata%5D%5Binternal_user_id%5D=42" in body
+
+
+def test_pending_telegram_invite_job_creates_link_only_for_non_member(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.messages = []
+            self.links = []
+
+        async def get_chat_member(self, chat_id, user_id):
+            return {"status": "left"}
+
+        async def create_chat_invite_link(self, chat_id, **kwargs):
+            link = f"https://t.me/+{chat_id}-test"
+            self.links.append((chat_id, kwargs))
+            return {"invite_link": link}
+
+        async def send_message(self, chat_id, text):
+            self.messages.append((chat_id, text))
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 42})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub-invite', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        connection.execute(
+            "INSERT INTO outbox_jobs(kind, aggregate_key, payload) VALUES ('telegram.invite', 'invite-1', ?)",
+            (json.dumps({"user_id": user["id"]}),),
+        )
+        result = asyncio.run(process_pending_telegram_invite_jobs(
+            connection, telegram, ("-100", "-200"), dry_run=False
+        ))
+        assert result == {"processed": 1, "failed": 0, "skipped": 0}
+        assert connection.execute("SELECT COUNT(*) FROM telegram_invites").fetchone()[0] == 2
+        assert len(telegram.messages) == 1
+
+
+def test_expired_telegram_invite_is_revoked(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.revoked = []
+
+        async def revoke_chat_invite_link(self, chat_id, invite_link):
+            self.revoked.append((chat_id, invite_link))
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 42})
+        connection.execute(
+            "INSERT INTO telegram_invites(user_id, chat_id, invite_link, expires_at) VALUES (?, '-100', ?, ?)",
+            (user["id"], "https://t.me/+expired", "2000-01-01T00:00:00+00:00"),
+        )
+        from app.membership import revoke_expired_telegram_invites
+        result = asyncio.run(revoke_expired_telegram_invites(connection, telegram, dry_run=False))
+        assert result == {"revoked": 1, "would_revoke": 0, "failed": 0}
+        assert connection.execute("SELECT status FROM telegram_invites").fetchone()[0] == "expired"
+        assert telegram.revoked == [("-100", "https://t.me/+expired")]
 
 
 def test_pending_stripe_job_marks_unknown_user_failed(tmp_path):

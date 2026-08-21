@@ -19,6 +19,10 @@ class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/nero.db")
     admin_api_token: str = os.getenv("ADMIN_API_TOKEN", "")
     stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+    stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
+    stripe_price_id: str = os.getenv("STRIPE_PRICE_ID", "")
+    checkout_success_url: str = os.getenv("CHECKOUT_SUCCESS_URL", "")
+    checkout_cancel_url: str = os.getenv("CHECKOUT_CANCEL_URL", "")
     stripe_signature_tolerance_seconds: int = int(
         os.getenv("STRIPE_SIGNATURE_TOLERANCE_SECONDS", "300")
     )

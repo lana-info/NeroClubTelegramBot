@@ -43,7 +43,7 @@ class TelegramClient:
             {
                 "url": url,
                 "secret_token": secret_token,
-                "allowed_updates": ["message", "chat_member"],
+                "allowed_updates": ["message", "chat_member", "chat_join_request"],
             },
         )
 
@@ -69,3 +69,6 @@ class TelegramClient:
 
     async def unban_chat_member(self, chat_id: int | str, user_id: int) -> Any:
         return await self.call("unbanChatMember", {"chat_id": chat_id, "user_id": user_id, "only_if_banned": True})
+
+    async def revoke_chat_invite_link(self, chat_id: int | str, invite_link: str) -> Any:
+        return await self.call("revokeChatInviteLink", {"chat_id": chat_id, "invite_link": invite_link})

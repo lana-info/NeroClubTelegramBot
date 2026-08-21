@@ -19,7 +19,14 @@ from .telegram_updates import process_update
 from .telegram_menu import BOT_COMMANDS
 from .stripe_events import process_pending_stripe_events
 from .site_access import process_pending_site_access_jobs
-from .membership import MembershipError, create_personal_invite, process_pending_telegram_restore_jobs, reconcile_members
+from .membership import (
+    MembershipError,
+    create_personal_invite,
+    process_pending_telegram_invite_jobs,
+    process_pending_telegram_restore_jobs,
+    reconcile_members,
+    revoke_expired_telegram_invites,
+)
 from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
 from .sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
@@ -209,6 +216,10 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 app_keys_encryption_key=settings.app_keys_encryption_key,
                 admin_telegram_ids=settings.admin_telegram_ids,
                 payment_url=settings.payment_url,
+                stripe_secret_key=settings.stripe_secret_key,
+                stripe_price_id=settings.stripe_price_id,
+                checkout_success_url=settings.checkout_success_url,
+                checkout_cancel_url=settings.checkout_cancel_url,
             )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:
@@ -274,6 +285,31 @@ async def process_telegram_restores(_: str = Depends(require_admin)) -> dict[str
             settings.telegram_chat_id,
             additional_chat_ids=((settings.telegram_channel_id,) if settings.telegram_channel_id else ()),
             dry_run=settings.dry_run,
+        )
+
+
+@app.post("/internal/jobs/process-telegram-invites")
+async def process_telegram_invites(_: str = Depends(require_admin)) -> dict[str, int]:
+    if not settings.telegram_bot_token or not settings.telegram_chat_id:
+        raise HTTPException(status_code=503, detail="Telegram chat integration is not configured")
+    telegram = TelegramClient(settings.telegram_bot_token)
+    chat_ids = tuple(
+        chat_id for chat_id in (settings.telegram_chat_id, settings.telegram_channel_id) if chat_id
+    )
+    with db.connect() as connection:
+        return await process_pending_telegram_invite_jobs(
+            connection, telegram, chat_ids, dry_run=settings.dry_run
+        )
+
+
+@app.post("/internal/jobs/revoke-telegram-invites")
+async def revoke_telegram_invites(_: str = Depends(require_admin)) -> dict[str, int]:
+    if not settings.telegram_bot_token:
+        raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
+    telegram = TelegramClient(settings.telegram_bot_token)
+    with db.connect() as connection:
+        return await revoke_expired_telegram_invites(
+            connection, telegram, dry_run=settings.dry_run
         )
 
 

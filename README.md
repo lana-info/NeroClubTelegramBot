@@ -16,6 +16,8 @@ The first vertical slice contains:
 - protected Dashboard preview and CSV export for the future Google Sheets panel;
 - whitelist, manual allow/deny and manual access extension;
 - Stripe webhook signature verification and duplicate-event protection;
+- Stripe Checkout sessions with internal user metadata; confirmed `invoice.paid`
+  events queue personal Telegram join-request invites;
 - Stripe inbox/outbox worker for idempotent subscription-state updates;
 - Telegram webhook with `/start`, `/status` and `/help`, including `update_id` deduplication;
 - Telegram `chat_member` handling: ordinary leave queues WordPress deactivation,
@@ -26,6 +28,8 @@ The first vertical slice contains:
 - Google Sheets actions `issue_credentials` and `resend_delivery` are queued without storing a password;
 - protected `/internal/jobs/process-site-access` worker endpoint for queued site-access delivery;
 - protected personal invite endpoint and dry-run Telegram membership reconciliation;
+- Telegram join requests are approved only for the matching user and unexpired
+  stored invite; expired invite links are revoked by a scheduled worker;
 - protected subscription reminder job for 7-day and 3-day notifications;
 - health endpoint;
 - Docker configuration;
@@ -62,7 +66,7 @@ Telegram access operations are available to the admin API as `/internal/users/{u
 
 The reminder endpoint is `/internal/jobs/send-reminders`. Run it once per day from the server scheduler. It is idempotent and does not send messages while `DRY_RUN=true`. Set `PAYMENT_URL` when a payment page is available.
 
-The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe and site-access queues hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
+The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe, site-access, personal Telegram invites and expired invite revocation hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
 
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
 
@@ -70,7 +74,7 @@ Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. User
 
 After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_URL`, call the protected
 `/internal/telegram/setup-menu` endpoint once. It publishes the command list and
-sets Telegram `allowed_updates` to `message` and `chat_member`.
+sets Telegram `allowed_updates` to `message`, `chat_member` and `chat_join_request`.
 
 To connect the operational panel, copy `google-apps-script/SheetsSync.gs` and
 `google-apps-script/KeysSync.gs` into Extensions → Apps Script for the new

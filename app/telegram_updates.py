@@ -7,6 +7,8 @@ from typing import Any
 from .access import effective_access, upsert_user
 from .integrations.telegram import TelegramClient
 from .integrations.wordpress import WordPressClient
+from .stripe_checkout import StripeCheckoutError, create_checkout_session
+from .membership import process_telegram_join_request
 from .site_access import SiteAccessError, issue_site_credentials
 from .site_access import queue_site_access_job
 from .keys import AppKeyError, display_expiry, keys_for_user
@@ -24,6 +26,10 @@ async def process_update(
     app_keys_encryption_key: str = "",
     admin_telegram_ids: tuple[int, ...] = (),
     payment_url: str = "",
+    stripe_secret_key: str = "",
+    stripe_price_id: str = "",
+    checkout_success_url: str = "",
+    checkout_cancel_url: str = "",
 ) -> str:
     update_id = update.get("update_id")
     if not isinstance(update_id, int):
@@ -44,6 +50,13 @@ async def process_update(
             update_id,
             chat_member,
             chat_id=chat_id,
+        )
+
+    chat_join_request = update.get("chat_join_request")
+    if chat_join_request is not None:
+        allowed = chat_id if isinstance(chat_id, tuple) else (chat_id,) if chat_id is not None else ()
+        return await process_telegram_join_request(
+            db, telegram, update_id, chat_join_request, allowed_chat_ids=allowed
         )
 
     message = update.get("message") or {}
@@ -168,7 +181,26 @@ async def process_update(
             text = "Ваши ключи приложений:\n\n" + "\n\n".join(items)
         await telegram.send_message(message_chat_id, text)
     elif command in {"/pay", "/renew"}:
-        text = f"Оплатить или продлить подписку: {payment_url}" if payment_url else "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
+        text = "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
+        try:
+            if stripe_secret_key and stripe_price_id:
+                session = await create_checkout_session(
+                    stripe_secret_key,
+                    stripe_price_id,
+                    user["id"],
+                    success_url=checkout_success_url,
+                    cancel_url=checkout_cancel_url,
+                    customer_email=user["wordpress_email"],
+                )
+                db.execute(
+                    "INSERT OR IGNORE INTO stripe_checkout_sessions(session_id, user_id, status) VALUES (?, ?, 'open')",
+                    (session["id"], user["id"]),
+                )
+                text = f"Оплатить или продлить подписку:\n{session['url']}"
+            elif payment_url:
+                text = f"Оплатить или продлить подписку: {payment_url}"
+        except StripeCheckoutError:
+            text = "Не удалось создать ссылку на оплату. Попробуйте позже или обратитесь к администратору."
         await telegram.send_message(message_chat_id, text, reply_markup=REPLY_KEYBOARD)
     elif command == "/site-access":
         subscription = db.execute(

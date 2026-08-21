@@ -26,7 +26,8 @@
    Права файла: только владелец-системный администратор.
 3. В `nero_club.env` указать Telegram-токен, ID чата и, если используется,
    ID специального канала (`TELEGRAM_CHANNEL_ID`), Telegram secret,
-   Stripe secret и webhook secret, WordPress URL и shared secret,
+   Stripe API key, Stripe Price ID, Checkout return URLs и webhook secret,
+   WordPress URL и shared secret,
    `ADMIN_API_TOKEN`, `APP_KEYS_ENCRYPTION_KEY`, ID администратора и ссылку
    оплаты.
 4. Подключить два HTTPS-маршрута существующего reverse proxy:
