@@ -76,6 +76,8 @@ async def process_pending_site_access_jobs(
     *,
     limit: int = 20,
     dry_run: bool = False,
+    wordpress_access_enabled: bool = True,
+    wordpress_deactivation_enabled: bool = True,
 ) -> dict[str, int]:
     jobs = db.execute(
         "SELECT id, kind, aggregate_key, payload, attempts FROM outbox_jobs "
@@ -89,6 +91,12 @@ async def process_pending_site_access_jobs(
     for job in jobs:
         payload = json.loads(job["payload"])
         try:
+            if job["kind"] == "site.credentials" and not wordpress_access_enabled:
+                continue
+            if job["kind"] == "site.deactivate" and not wordpress_deactivation_enabled:
+                continue
+            if job["kind"] == "site.restore" and not wordpress_access_enabled:
+                continue
             if job["kind"] == "site.credentials":
                 result = await issue_site_credentials(
                     db,

@@ -30,6 +30,8 @@ from .membership import (
 from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
 from .sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
+from .sheets import rows_for_settings_sheet
+from .feature_flags import get_flags, sync_flags
 
 
 app = FastAPI(title="Nero Club Subscription Backend", version="0.1.0")
@@ -94,6 +96,25 @@ def sheets_dashboard(_: str = Depends(require_admin)) -> dict[str, Any]:
     with db.connect() as connection:
         rows = dashboard_rows(connection)
     return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.get("/internal/sheets/settings")
+def sheets_settings(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = rows_for_settings_sheet(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.post("/internal/sheets/settings")
+def update_sheet_settings(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[str, int]:
+    rows = payload.get("flags")
+    if not isinstance(rows, list) or len(rows) > 20:
+        raise HTTPException(status_code=422, detail="flags must be a list with at most 20 items")
+    try:
+        with db.connect() as connection:
+            return sync_flags(connection, rows)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.post("/internal/telegram/setup-menu")
@@ -223,6 +244,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 stripe_price_id=settings.stripe_price_id,
                 checkout_success_url=settings.checkout_success_url,
                 checkout_cancel_url=settings.checkout_cancel_url,
+                feature_flags=get_flags(connection),
             )
         return {"status": result}
     except (ValueError, json.JSONDecodeError) as exc:
@@ -268,8 +290,13 @@ async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
             chat_ids.append(settings.telegram_channel_id)
         totals = {"checked": 0, "active": 0, "denied": 0, "removed": 0, "would_remove": 0, "failed": 0}
         for chat_id in chat_ids:
+            removal_enabled = get_flags(connection)[
+                "telegram_channel_removal" if chat_id == settings.telegram_channel_id else "telegram_group_removal"
+            ]
             result = await reconcile_members(
-                connection, telegram, chat_id, dry_run=settings.dry_run
+                connection, telegram, chat_id, dry_run=settings.dry_run,
+                removal_enabled=removal_enabled,
+                site_deactivation_enabled=get_flags(connection)["wordpress_deactivation"],
             )
             for key in totals:
                 totals[key] += result[key]
@@ -322,6 +349,8 @@ async def send_reminders(_: str = Depends(require_admin)) -> dict[str, int]:
         raise HTTPException(status_code=503, detail="TELEGRAM_BOT_TOKEN is not configured")
     telegram = TelegramClient(settings.telegram_bot_token)
     with db.connect() as connection:
+        if not get_flags(connection)["reminders"]:
+            return {"sent": 0, "would_send": 0, "failed": 0, "skipped": 0, "status": "disabled"}
         return await send_subscription_reminders(
             connection,
             telegram,
@@ -345,7 +374,15 @@ async def process_site_access_jobs(_: str = Depends(require_admin)) -> dict[str,
     telegram = TelegramClient(settings.telegram_bot_token)
     wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
     with db.connect() as connection:
-        return await process_pending_site_access_jobs(connection, telegram, wordpress, dry_run=settings.dry_run)
+        flags = get_flags(connection)
+        return await process_pending_site_access_jobs(
+            connection,
+            telegram,
+            wordpress,
+            dry_run=settings.dry_run,
+            wordpress_access_enabled=flags["wordpress_access"],
+            wordpress_deactivation_enabled=flags["wordpress_deactivation"],
+        )
 
 
 @app.get("/internal/sheets/preview")

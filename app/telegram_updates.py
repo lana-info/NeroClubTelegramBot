@@ -31,7 +31,11 @@ async def process_update(
     stripe_price_id: str = "",
     checkout_success_url: str = "",
     checkout_cancel_url: str = "",
+    feature_flags: dict[str, bool] | None = None,
 ) -> str:
+    feature_flags = feature_flags or {
+        "wordpress_access": True, "app_keys": True,
+    }
     update_id = update.get("update_id")
     if not isinstance(update_id, int):
         raise ValueError("Telegram update_id is required")
@@ -166,6 +170,9 @@ async def process_update(
             text = "Сообщение отправлено администратору."
         await telegram.send_message(message_chat_id, text, reply_markup=REPLY_KEYBOARD)
     elif command == "/my-keys":
+        if not feature_flags.get("app_keys", True):
+            await telegram.send_message(message_chat_id, "Выдача ключей временно приостановлена администратором.")
+            return "processed"
         try:
             keys = keys_for_user(db, user["id"], app_keys_encryption_key)
         except (AppKeyError, ValueError):
@@ -209,6 +216,9 @@ async def process_update(
             text = "Не удалось создать ссылку на оплату. Попробуйте позже или обратитесь к администратору."
         await telegram.send_message(message_chat_id, text, reply_markup=REPLY_KEYBOARD)
     elif command == "/site-access":
+        if not feature_flags.get("wordpress_access", True):
+            await telegram.send_message(message_chat_id, "Выдача доступа к сайту временно приостановлена администратором.")
+            return "processed"
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
         ).fetchone()

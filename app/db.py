@@ -164,6 +164,12 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     used_at TEXT
                 );
+
+                CREATE TABLE IF NOT EXISTS feature_flags (
+                    name TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 """
             )
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}

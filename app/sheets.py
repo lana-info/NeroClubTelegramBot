@@ -22,6 +22,17 @@ SITE_HEADERS = [
     "command_id", "last_result",
 ]
 
+SETTINGS_HEADERS = ["name", "enabled", "description", "updated_at"]
+
+SETTINGS_DESCRIPTIONS = {
+    "telegram_group_removal": "Удалять пользователей из Telegram-группы",
+    "telegram_channel_removal": "Удалять пользователей из специального канала",
+    "wordpress_deactivation": "Деактивировать доступ WordPress",
+    "wordpress_access": "Выдавать и восстанавливать доступ WordPress",
+    "app_keys": "Выдавать пользователям ключи приложений",
+    "reminders": "Отправлять напоминания о подписке",
+}
+
 
 def _sheet_datetime(value: str | None) -> str | None:
     if not value:
@@ -111,6 +122,17 @@ def dashboard_rows(db: sqlite3.Connection) -> list[list[Any]]:
         ["expired_or_denied_users", len(users) - active], ["whitelist_users", whitelist],
         ["stripe_events", payments], ["failed_jobs", failures],
     ]
+
+
+def rows_for_settings_sheet(db: sqlite3.Connection) -> list[list[Any]]:
+    from .feature_flags import get_flags
+
+    rows = [SETTINGS_HEADERS]
+    flags = get_flags(db)
+    for name, enabled in flags.items():
+        updated = db.execute("SELECT updated_at FROM feature_flags WHERE name = ?", (name,)).fetchone()
+        rows.append([name, "ВКЛ" if enabled else "ВЫКЛ", SETTINGS_DESCRIPTIONS[name], updated["updated_at"] if updated else ""])
+    return rows
 
 
 def import_users(db: sqlite3.Connection, rows: list[dict[str, Any]]) -> list[dict[str, int]]:

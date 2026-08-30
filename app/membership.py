@@ -215,6 +215,8 @@ async def reconcile_members(
     chat_id: int | str,
     *,
     dry_run: bool,
+    removal_enabled: bool = True,
+    site_deactivation_enabled: bool = True,
 ) -> dict[str, int]:
     users = db.execute("SELECT * FROM users WHERE telegram_id IS NOT NULL").fetchall()
     checked = active = denied = removed = would_remove = failed = 0
@@ -233,11 +235,11 @@ async def reconcile_members(
             checked += 1
             if access == "active":
                 active += 1
-                if member_status == "left":
+                if member_status == "left" and site_deactivation_enabled:
                     queue_site_access_job(db, user["id"], "deactivate", f"reconcile-left-{user['id']}")
             else:
                 denied += 1
-                if member_status in {"member", "restricted", "administrator", "creator"}:
+                if removal_enabled and member_status in {"member", "restricted", "administrator", "creator"}:
                     if dry_run:
                         would_remove += 1
                     else:

@@ -13,6 +13,7 @@ const SHEETS_ADMIN_TOKEN_PROPERTY = 'ADMIN_API_TOKEN';
 const USERS_SHEET = 'Пользователи';
 const SITE_SHEET = 'Доступ к сайту';
 const DASHBOARD_SHEET = 'Dashboard';
+const SETTINGS_SHEET = 'Настройки';
 
 function installSheetsSyncTrigger() {
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
@@ -82,6 +83,22 @@ function syncSheetCommands_() {
   syncCommandsFromSheet_(SITE_SHEET);
 }
 
+function syncSettings_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(SETTINGS_SHEET);
+  if (!sheet) return;
+  const values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return;
+  const index = headerIndex_(values[0]);
+  ['name', 'enabled'].forEach(function(header) {
+    if (index[header] === undefined) throw new Error('Missing header in ' + SETTINGS_SHEET + ': ' + header);
+  });
+  const flags = [];
+  for (let row = 1; row < values.length; row++) {
+    if (values[row][index.name]) flags.push({name: values[row][index.name], enabled: values[row][index.enabled]});
+  }
+  backendRequest_('/internal/sheets/settings', 'post', {flags: flags});
+}
+
 function syncCommandsFromSheet_(sheetName) {
   const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
   if (!sheet) return;
@@ -128,7 +145,11 @@ function writeBackendRows_(sheetName, endpoint) {
 function syncAllSheets() {
   importCurrentSnapshot();
   syncSheetCommands_();
+  syncSettings_();
   writeBackendRows_(USERS_SHEET, '/internal/sheets/users');
   writeBackendRows_(SITE_SHEET, '/internal/sheets/site-access');
   writeBackendRows_(DASHBOARD_SHEET, '/internal/sheets/dashboard');
+  if (SpreadsheetApp.getActive().getSheetByName(SETTINGS_SHEET)) {
+    writeBackendRows_(SETTINGS_SHEET, '/internal/sheets/settings');
+  }
 }
