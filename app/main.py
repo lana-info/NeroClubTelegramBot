@@ -160,6 +160,8 @@ def sheet_command(payload: dict[str, Any], actor: str = Depends(require_admin)) 
 
 @app.post("/webhooks/stripe")
 async def stripe_webhook(request: Request, stripe_signature: str | None = Header(default=None)) -> dict[str, str]:
+    if settings.payment_source == "sheet":
+        return {"status": "disabled", "reason": "payment source is Google Sheets"}
     payload = await request.body()
     if not stripe_signature:
         raise HTTPException(status_code=400, detail="Stripe-Signature is required")
@@ -216,6 +218,7 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 app_keys_encryption_key=settings.app_keys_encryption_key,
                 admin_telegram_ids=settings.admin_telegram_ids,
                 payment_url=settings.payment_url,
+                payment_source=settings.payment_source,
                 stripe_secret_key=settings.stripe_secret_key,
                 stripe_price_id=settings.stripe_price_id,
                 checkout_success_url=settings.checkout_success_url,
@@ -320,12 +323,17 @@ async def send_reminders(_: str = Depends(require_admin)) -> dict[str, int]:
     telegram = TelegramClient(settings.telegram_bot_token)
     with db.connect() as connection:
         return await send_subscription_reminders(
-            connection, telegram, payment_url=settings.payment_url, dry_run=settings.dry_run
+            connection,
+            telegram,
+            payment_url=settings.payment_url if settings.payment_source != "sheet" else "",
+            dry_run=settings.dry_run,
         )
 
 
 @app.post("/internal/jobs/process-stripe")
 def process_stripe_jobs(_: str = Depends(require_admin)) -> dict[str, Any]:
+    if settings.payment_source == "sheet":
+        return {"processed": 0, "failed": 0, "skipped": 0, "status": "disabled"}
     with db.connect() as connection:
         return process_pending_stripe_events(connection)
 

@@ -18,6 +18,7 @@ def _telegram_ids(value: str) -> tuple[int, ...]:
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "sqlite:///./data/nero.db")
     admin_api_token: str = os.getenv("ADMIN_API_TOKEN", "")
+    payment_source: str = os.getenv("PAYMENT_SOURCE", "sheet").strip().lower()
     stripe_webhook_secret: str = os.getenv("STRIPE_WEBHOOK_SECRET", "")
     stripe_secret_key: str = os.getenv("STRIPE_SECRET_KEY", "")
     stripe_price_id: str = os.getenv("STRIPE_PRICE_ID", "")

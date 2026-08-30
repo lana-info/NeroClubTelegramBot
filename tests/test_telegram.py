@@ -69,6 +69,30 @@ def test_friendly_menu_button_is_mapped_to_command(tmp_path):
     assert "ключей" in transport.calls[0]["text"].lower()
 
 
+def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'sheet-payments.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {
+        "update_id": 14,
+        "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/pay"},
+    }
+
+    with db.connect() as connection:
+        assert asyncio.run(process_update(
+            connection,
+            update,
+            client,
+            payment_source="sheet",
+            stripe_secret_key="sk_test_should_not_be_used",
+            stripe_price_id="price_should_not_be_used",
+        )) == "processed"
+
+    assert "отмечается администратором" in transport.calls[0]["text"]
+    assert "stripe" not in transport.calls[0]["text"].lower()
+
+
 def test_user_can_send_support_request_and_admin_can_reply(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'support.db'}")
     db.init_schema()

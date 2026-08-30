@@ -26,6 +26,7 @@ async def process_update(
     app_keys_encryption_key: str = "",
     admin_telegram_ids: tuple[int, ...] = (),
     payment_url: str = "",
+    payment_source: str = "sheet",
     stripe_secret_key: str = "",
     stripe_price_id: str = "",
     checkout_success_url: str = "",
@@ -183,7 +184,12 @@ async def process_update(
     elif command in {"/pay", "/renew"}:
         text = "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
         try:
-            if stripe_secret_key and stripe_price_id:
+            if payment_source == "sheet":
+                text = (
+                    "Оплата отмечается администратором в таблице. "
+                    "Пожалуйста, отправьте администратору подтверждение оплаты."
+                )
+            elif stripe_secret_key and stripe_price_id:
                 session = await create_checkout_session(
                     stripe_secret_key,
                     stripe_price_id,
