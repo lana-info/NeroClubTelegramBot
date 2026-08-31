@@ -450,6 +450,17 @@ def test_restore_telegram_is_explicit_and_queues_wordpress_restore(tmp_path):
         assert connection.execute("SELECT kind FROM outbox_jobs").fetchone()[0] == "telegram.restore"
 
 
+def test_issue_invite_action_is_queued_without_requiring_a_ban(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 321})
+        result = apply_command(connection, "invite-1", user["id"], "issue_invite", {}, "test-admin")
+        assert result["status"] == "queued"
+        job = connection.execute("SELECT kind, payload FROM outbox_jobs").fetchone()
+        assert job["kind"] == "telegram.invite"
+        assert str(user["id"]) in job["payload"]
+
+
 def test_telegram_restore_unbans_sends_invite_and_clears_manual_ban(tmp_path):
     class FakeTelegram:
         def __init__(self):

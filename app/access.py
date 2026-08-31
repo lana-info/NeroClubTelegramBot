@@ -78,7 +78,7 @@ def apply_command(
     db: sqlite3.Connection, command_id: str, user_id: int, action: str, payload: dict[str, Any], actor: str
 ) -> dict[str, Any]:
     allowed = {
-        "whitelist", "unwhitelist", "deny", "allow", "extend", "restore_telegram",
+        "whitelist", "unwhitelist", "deny", "allow", "extend", "restore_telegram", "issue_invite",
         "issue_credentials", "resend_delivery", "revoke_site_access", "restore_site_access",
     }
     if action not in allowed:
@@ -142,6 +142,14 @@ def apply_command(
             restore_queued = True
         db.execute("UPDATE users SET telegram_banned = 1 WHERE id = ?", (user_id,))
 
+    if action == "issue_invite":
+        db.execute(
+            "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+            ("telegram.invite", f"sheets-telegram-invite-{command_id}", json.dumps({
+                "command_id": command_id, "user_id": user_id, "action": action,
+            }, ensure_ascii=False)),
+        )
+
     if action in {"issue_credentials", "resend_delivery"}:
         db.execute(
             "INSERT INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
@@ -154,8 +162,10 @@ def apply_command(
     elif site_command_queued:
         status = "queued"
         result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
-    elif action == "restore_telegram":
+    elif action in {"restore_telegram", "issue_invite"}:
         status = "queued" if restore_queued else "done"
+        if action == "issue_invite":
+            status = "queued"
         result = json.dumps({"action": action, "user_id": user_id, "status": status}, ensure_ascii=False)
     else:
         status = "done"

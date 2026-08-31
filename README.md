@@ -74,6 +74,10 @@ The user menu keeps payment links and payment confirmation as separate actions.
 
 The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe, site-access, personal Telegram invites and expired invite revocation hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
 
+To issue a fresh personal invite from Google Sheets, use `issue_invite` in the
+user row's `action` column. It is independent of removal `DRY_RUN`; the invite
+job still checks active access and creates a 24-hour, user-bound link.
+
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
 
 Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. Users can choose `💬 Связаться с администратором`; administrators receive the request and answer with `/reply REQUEST_ID TEXT`.
