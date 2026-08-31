@@ -336,7 +336,7 @@ async def process_telegram_invites(_: str = Depends(require_admin)) -> dict[str,
     )
     with db.connect() as connection:
         return await process_pending_telegram_invite_jobs(
-            connection, telegram, chat_ids, dry_run=settings.dry_run
+            connection, telegram, chat_ids, dry_run=settings.invites_dry_run
         )
 
 
