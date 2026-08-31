@@ -194,7 +194,8 @@ async def process_update(
             if payment_source == "sheet":
                 text = (
                     "Оплата отмечается администратором в таблице. "
-                    "Пожалуйста, отправьте администратору подтверждение оплаты."
+                    "Чтобы найти оплату, отправьте администратору email, дату и способ оплаты. "
+                    "Скриншот не нужен."
                 )
             elif stripe_secret_key and stripe_price_id:
                 session = await create_checkout_session(
