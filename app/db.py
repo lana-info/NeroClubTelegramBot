@@ -20,9 +20,10 @@ class Database:
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path)
+        connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
+        connection.execute("PRAGMA busy_timeout = 30000")
         try:
             yield connection
             connection.commit()
