@@ -282,7 +282,8 @@ def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
         )
         result = asyncio.run(send_subscription_reminders(connection, telegram, payment_url="https://pay.test", now=now))
         assert result["sent"] == 1
-        assert "22.08.2026" in telegram.messages[0][1]
+        assert "Ссылка для оплаты: https://pay.test" in telegram.messages[0][1]
+        assert "22 августа 2026 года" in telegram.messages[0][1]
         second = asyncio.run(send_subscription_reminders(connection, telegram, payment_url="https://pay.test", now=now))
         assert second["sent"] == 0
         assert second["skipped"] == 1

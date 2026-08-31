@@ -8,6 +8,14 @@ from .access import parse_dt
 from .integrations.telegram import TelegramClient, TelegramError
 
 
+def _display_date(value: datetime) -> str:
+    months = (
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    )
+    return f"{value.day} {months[value.month - 1]} {value.year} года"
+
+
 async def send_subscription_reminders(
     db: sqlite3.Connection,
     telegram: TelegramClient,
@@ -39,10 +47,14 @@ async def send_subscription_reminders(
         ).fetchone():
             skipped += 1
             continue
-        payment_line = f"\nОплатить или продлить: {payment_url}" if payment_url else "\nДля оплаты выберите в меню «Оплатить / продлить»."
+        payment_line = (
+            f"\nСсылка для оплаты: {payment_url}"
+            if payment_url
+            else "\nДля оплаты обратитесь к администратору. После оплаты нажмите «Сообщить об оплате»."
+        )
         text = (
             f"Напоминание: подписка заканчивается через {days_left} дн.\n"
-            f"Дата окончания: {paid_until.strftime('%d.%m.%Y')}.{payment_line}"
+            f"Дата окончания: {_display_date(paid_until)}.{payment_line}"
         )
         if dry_run:
             would_send += 1
