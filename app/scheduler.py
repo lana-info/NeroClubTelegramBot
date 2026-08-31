@@ -44,9 +44,10 @@ async def main() -> None:
                 try:
                     status = await run_job(client, base_url, token, path)
                     print(f"scheduler job={path} status={status}", flush=True)
+                    if status < 500:
+                        last_run[path] = now
                 except httpx.HTTPError as exc:
                     print(f"scheduler job={path} error={type(exc).__name__}", flush=True)
-                last_run[path] = now
             await asyncio.sleep(interval)
 
 
