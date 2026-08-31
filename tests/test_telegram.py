@@ -90,6 +90,7 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
         )) == "processed"
 
     assert "отмечается администратором" in transport.calls[0]["text"]
+    assert "хотите подтвердить оплату" in transport.calls[0]["text"]
     assert "stripe" not in transport.calls[0]["text"].lower()
 
 
