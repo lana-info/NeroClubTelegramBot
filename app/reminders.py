@@ -37,7 +37,7 @@ async def send_subscription_reminders(
             skipped += 1
             continue
         days_left = (paid_until.date() - now.date()).days
-        if days_left not in {7, 3}:
+        if days_left not in {7, 3, 1}:
             skipped += 1
             continue
         notification_key = f"subscription-expiry-{paid_until.date().isoformat()}-{days_left}d"
@@ -52,8 +52,9 @@ async def send_subscription_reminders(
             if payment_url
             else "\nДля оплаты обратитесь к администратору. После оплаты нажмите «Сообщить об оплате»."
         )
+        days_label = {1: "день", 3: "дня", 7: "дней"}[days_left]
         text = (
-            f"Напоминание: подписка заканчивается через {days_left} дн.\n"
+            f"Напоминание: подписка заканчивается через {days_left} {days_label}.\n"
             f"Дата окончания: {_display_date(paid_until)}.{payment_line}"
         )
         if dry_run:

@@ -343,6 +343,17 @@ def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
         assert second["sent"] == 0
         assert second["skipped"] == 1
 
+        tomorrow_user = upsert_user(connection, {"telegram_id": 45})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'sheet', 'sub_tomorrow', 'active', 'paid', '2026-08-16T00:00:00+00:00')",
+            (tomorrow_user["id"],),
+        )
+        connection.execute("UPDATE users SET reminders_enabled = 1 WHERE id = ?", (tomorrow_user["id"],))
+        tomorrow = asyncio.run(send_subscription_reminders(connection, telegram, now=now))
+        assert tomorrow["sent"] == 1
+        assert "через 1 день" in telegram.messages[-1][1]
+
 
 def test_access_override_and_whitelist(tmp_path):
     db = database(tmp_path)

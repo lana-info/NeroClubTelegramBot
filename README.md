@@ -30,7 +30,7 @@ The first vertical slice contains:
 - protected personal invite endpoint and dry-run Telegram membership reconciliation;
 - Telegram join requests are approved only for the matching user and unexpired
   stored invite; expired invite links are revoked by a scheduled worker;
-- protected subscription reminder job for 7-day and 3-day notifications;
+- protected subscription reminder job for 7-day, 3-day and 1-day notifications;
 - health endpoint;
 - Docker configuration;
 - tests for authentication, idempotent Sheets commands and Stripe webhook handling.
