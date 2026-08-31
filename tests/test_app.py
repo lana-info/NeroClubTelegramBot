@@ -280,6 +280,7 @@ def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
             "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
             "VALUES (?, 'stripe', 'sub_reminder', 'active', 'paid', '2026-08-22T00:00:00+00:00')", (user["id"],)
         )
+        connection.execute("UPDATE users SET reminders_enabled = 1 WHERE id = ?", (user["id"],))
         result = asyncio.run(send_subscription_reminders(connection, telegram, payment_url="https://pay.test", now=now))
         assert result["sent"] == 1
         assert "Ссылка для оплаты: https://pay.test" in telegram.messages[0][1]

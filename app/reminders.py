@@ -28,7 +28,7 @@ async def send_subscription_reminders(
     users = db.execute(
         "SELECT u.id, u.telegram_id, s.provider_paid_until FROM users u "
         "JOIN subscriptions s ON s.id = (SELECT id FROM subscriptions WHERE user_id = u.id ORDER BY id DESC LIMIT 1) "
-        "WHERE u.telegram_id IS NOT NULL AND s.provider_paid_until IS NOT NULL"
+        "WHERE u.telegram_id IS NOT NULL AND u.reminders_enabled = 1 AND s.provider_paid_until IS NOT NULL"
     ).fetchall()
     sent = would_send = failed = skipped = 0
     for user in users:

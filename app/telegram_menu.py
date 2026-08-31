@@ -7,6 +7,7 @@ MENU_BUTTONS = [
     ["📊 Статус подписки", "🔑 Мои ключи"],
     ["🌐 Доступ к сайту", "🧾 Сообщить об оплате"],
     ["💬 Связаться с администратором", "ℹ️ Помощь"],
+    ["🔔 Включить напоминания", "🔕 Выключить напоминания"],
 ]
 
 ADMIN_MENU_BUTTONS = [["📥 Новые обращения"], ["ℹ️ Помощь"]]
@@ -30,6 +31,8 @@ BUTTON_COMMANDS = {
     "ℹ️ помощь": "/help",
     "💬 связаться с администратором": "/support",
     "📥 новые обращения": "/admin_inbox",
+    "🔔 включить напоминания": "/reminders_on",
+    "🔕 выключить напоминания": "/reminders_off",
 }
 
 BOT_COMMANDS = [
@@ -39,6 +42,8 @@ BOT_COMMANDS = [
     {"command": "site_access", "description": "Получить доступ к сайту"},
     {"command": "pay", "description": "Оплатить или продлить подписку"},
     {"command": "help", "description": "Помощь"},
+    {"command": "reminders_on", "description": "Включить напоминания"},
+    {"command": "reminders_off", "description": "Выключить напоминания"},
 ]
 
 

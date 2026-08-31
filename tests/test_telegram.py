@@ -85,6 +85,21 @@ def test_status_uses_readable_russian_date(tmp_path):
     assert "Доступ до: 1 сентября 2027 года" in transport.calls[0]["text"]
 
 
+def test_user_can_toggle_reminders(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'reminders-toggle.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update_on = {"update_id": 17, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/reminders_on"}}
+    update_off = {"update_id": 18, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "🔕 Выключить напоминания"}}
+    with db.connect() as connection:
+        asyncio.run(process_update(connection, update_on, client))
+        assert connection.execute("SELECT reminders_enabled FROM users WHERE telegram_id = 42").fetchone()[0] == 1
+        asyncio.run(process_update(connection, update_off, client))
+        assert connection.execute("SELECT reminders_enabled FROM users WHERE telegram_id = 42").fetchone()[0] == 0
+    assert "выключены" in transport.calls[-1]["text"].lower()
+
+
 def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'sheet-payments.db'}")
     db.init_schema()

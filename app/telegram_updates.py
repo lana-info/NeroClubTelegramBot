@@ -144,6 +144,14 @@ async def process_update(
         if until:
             text += f" Доступ до: {format_subscription_date(until)}."
         await telegram.send_message(message_chat_id, text)
+    elif command in {"/reminders_on", "/reminders_off"}:
+        enabled = command == "/reminders_on"
+        db.execute(
+            "UPDATE users SET reminders_enabled = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (int(enabled), user["id"]),
+        )
+        text = "Напоминания включены." if enabled else "Напоминания выключены."
+        await telegram.send_message(message_chat_id, text, reply_markup=REPLY_KEYBOARD)
     elif command == "/help":
         await telegram.send_message(
             message_chat_id,
@@ -152,6 +160,7 @@ async def process_update(
             "🔑 Мои ключи — ключи приложений\n"
             "🌐 Доступ к сайту — логин и постоянный пароль\n"
             "🧾 Сообщить об оплате — отправить данные платежа\n"
+            "🔔/🔕 Напоминания — включить или выключить уведомления\n"
             "ℹ️ Помощь — эта подсказка",
             reply_markup=REPLY_KEYBOARD,
         )

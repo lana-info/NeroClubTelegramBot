@@ -47,6 +47,7 @@ class Database:
                     whitelist INTEGER NOT NULL DEFAULT 0,
                     access_override TEXT NOT NULL DEFAULT 'none',
                     manual_access_until TEXT,
+                    reminders_enabled INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
@@ -184,3 +185,5 @@ class Database:
                 db.execute("ALTER TABLE users ADD COLUMN telegram_banned INTEGER NOT NULL DEFAULT 0")
             if "telegram_ban_source" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN telegram_ban_source TEXT")
+            if "reminders_enabled" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN reminders_enabled INTEGER NOT NULL DEFAULT 0")
