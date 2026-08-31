@@ -32,6 +32,7 @@ async def issue_site_credentials(
     wordpress: WordPressClient,
     *,
     idempotency_key: str,
+    allow_redelivery: bool = False,
 ) -> dict[str, Any]:
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if not user:
@@ -41,6 +42,8 @@ async def issue_site_credentials(
     ).fetchone()
     if effective_access(user, subscription) != "active":
         raise SiteAccessError("site access requires an active subscription")
+    if user["site_credentials_delivered_at"] and not allow_redelivery:
+        raise SiteAccessError("site credentials were already delivered")
     if not isinstance(user["telegram_id"], int):
         raise SiteAccessError("telegram_id is required")
 
@@ -61,8 +64,13 @@ async def issue_site_credentials(
             user["telegram_id"],
             "Доступ к сайту выдан.\n"
             f"Логин: {result['login']}\n"
-            f"Постоянный пароль: {password}\n\n"
-            "Не пересылайте это сообщение. При повторном запросе пароль будет заменён новым.",
+            f"Первоначальный пароль: {password}\n\n"
+            "Войдите на сайт и сразу замените его на свой личный пароль. "
+            "Не пересылайте это сообщение.",
+        )
+        db.execute(
+            "UPDATE users SET site_credentials_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (user_id,),
         )
     except (WordPressError, TelegramError, KeyError) as exc:
         raise SiteAccessError("site access delivery failed") from exc
@@ -104,6 +112,7 @@ async def process_pending_site_access_jobs(
                     telegram,
                     wordpress,
                     idempotency_key=f"{job['aggregate_key']}-attempt-{job['attempts'] + 1}",
+                    allow_redelivery=payload.get("action") == "resend_delivery",
                 )
             else:
                 user = db.execute("SELECT * FROM users WHERE id = ?", (int(payload["user_id"]),)).fetchone()

@@ -18,4 +18,4 @@ define('NERO_CLUB_SHARED_SECRET', 'replace-with-a-long-random-secret');
 
 Supported actions are `create_or_activate`, `deactivate`, and `restore`. Allowed WordPress roles default to `subscriber`; the plugin never accepts an administrator role from the request. Deactivation blocks future login and destroys active sessions without deleting the user. A supplied password does not expire; a repeated `/site-access` request replaces it with a new password.
 
-Permanent passwords are accepted only for the create/activate operation. They are not written to the plugin response beyond `password_set: true`, not logged, and must be delivered to the user by the backend over Telegram. The Google Sheet stores only login/status metadata, never the password.
+The backend sends an initial password only once per delivery request and tells the user to change it immediately after the first login. Passwords are not written to the plugin response beyond `password_set: true`, not logged, and must be delivered to the user by the backend over Telegram. The Google Sheet stores only login/status metadata, never the password.

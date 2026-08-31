@@ -175,6 +175,8 @@ class Database:
             columns = {row[1] for row in db.execute("PRAGMA table_info(users)").fetchall()}
             if "wordpress_login" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN wordpress_login TEXT")
+            if "site_credentials_delivered_at" not in columns:
+                db.execute("ALTER TABLE users ADD COLUMN site_credentials_delivered_at TEXT")
             if "telegram_membership_status" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN telegram_membership_status TEXT NOT NULL DEFAULT 'unknown'")
             if "telegram_banned" not in columns:

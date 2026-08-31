@@ -232,8 +232,15 @@ async def process_update(
                     db, user["id"], telegram, wordpress,
                     idempotency_key=f"telegram-site-access-{update_id}",
                 )
-            except (SiteAccessError, ValueError):
-                await telegram.send_message(message_chat_id, "Не удалось выдать доступ к сайту. Попробуйте позже.")
+            except (SiteAccessError, ValueError) as exc:
+                text = "Не удалось выдать доступ к сайту. Попробуйте позже."
+                if str(exc) == "site credentials were already delivered":
+                    text = (
+                        "Логин и первоначальный пароль уже были отправлены ранее. "
+                        "Проверьте личные сообщения и смените пароль после входа. "
+                        "Если доступ потерян, обратитесь к администратору."
+                    )
+                await telegram.send_message(message_chat_id, text)
     elif message_text and not message_text.startswith("/"):
         pending = db.execute(
             "SELECT id FROM support_requests WHERE user_id = ? AND status = 'awaiting_message' ORDER BY id DESC LIMIT 1",

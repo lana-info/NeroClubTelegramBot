@@ -132,8 +132,9 @@ def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_pa
         result = asyncio.run(process_update(connection, update, telegram, wordpress=wordpress))
         assert result == "processed"
         assert "password" not in json.dumps(dict(connection.execute("SELECT * FROM users").fetchone())).lower()
+        assert connection.execute("SELECT site_credentials_delivered_at FROM users").fetchone()[0]
     assert wordpress_transport.payload["password"]
-    assert "Постоянный пароль" in telegram_transport.calls[0]["text"]
+    assert "Первоначальный пароль" in telegram_transport.calls[0]["text"]
     assert "temporary_expires_at" not in wordpress_transport.payload
 
 
