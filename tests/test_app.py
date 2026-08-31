@@ -83,6 +83,26 @@ def test_license_sheet_can_assign_and_revoke_a_non_member_key(tmp_path):
         assert keys_for_user(connection, user["id"], encryption_key) == []
 
 
+def test_perpetual_license_ignores_an_accidental_expiry_date(tmp_path):
+    db = database(tmp_path)
+    encryption_key = Fernet.generate_key().decode()
+    with db.connect() as connection:
+        sync_license_rows(connection, [{
+            "license_id": "srv-perpetual", "product_id": "clipart-generator",
+            "license_key": "CG-PERPETUAL", "telegram_id": 8765,
+            "license_term": "perpetual", "expires_at": "2020-01-01T00:00:00+00:00",
+            "action": "issue",
+        }], encryption_key)
+        user = connection.execute("SELECT id FROM users WHERE telegram_id = 8765").fetchone()
+        row = connection.execute(
+            "SELECT key_expires_at FROM app_keys WHERE external_key_id = 'license-srv-perpetual'"
+        ).fetchone()
+        keys = keys_for_user(connection, user["id"], encryption_key)
+
+    assert row["key_expires_at"] is None
+    assert keys[0]["key"] == "CG-PERPETUAL"
+
+
 def test_sheet_command_is_idempotent(tmp_path):
     db = database(tmp_path)
     with db.connect() as connection:

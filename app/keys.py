@@ -209,6 +209,14 @@ def sync_license_rows(
                 raise ValueError("license_key is required")
             if not product_id:
                 raise ValueError("product_id is required")
+            license_term = str(payload.get("license_term") or "perpetual").lower()
+            if license_term not in {"perpetual", "custom"}:
+                raise ValueError("license_term must be perpetual or custom")
+            expires_at = payload.get("expires_at") or None
+            if license_term == "custom" and not expires_at:
+                raise ValueError("expires_at is required for a custom license")
+            if license_term == "perpetual":
+                expires_at = None
             telegram_id = payload.get("telegram_id")
             if telegram_id in (None, ""):
                 raise ValueError("telegram_id is required")
@@ -233,7 +241,7 @@ def sync_license_rows(
                 "app_name": payload.get("app_name") or product_id,
                 "access_plan": "license",
                 "key": license_key,
-                "key_expires_at": payload.get("expires_at") or None,
+                "key_expires_at": expires_at,
                 "user_id": assigned_user_id,
                 "status": "issued",
             }, encryption_key)
