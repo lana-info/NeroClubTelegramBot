@@ -218,6 +218,10 @@ def test_sheet_snapshot_import_is_idempotent_and_exposes_operational_rows(tmp_pa
         first = import_users(connection, payload)
         second = import_users(connection, payload)
         assert first == second
+        invite_jobs = connection.execute(
+            "SELECT COUNT(*) FROM outbox_jobs WHERE kind = 'telegram.invite'"
+        ).fetchone()[0]
+        assert invite_jobs == 1
         assert connection.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0] == 1
         user_rows = rows_for_users_sheet(connection)

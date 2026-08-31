@@ -169,5 +169,16 @@ def import_users(db: sqlite3.Connection, rows: list[dict[str, Any]]) -> list[dic
                    billing_status = 'active', payment_status = 'paid', updated_at = CURRENT_TIMESTAMP""",
                 (user["id"], provider, subscription_id, paid_until),
             )
+            # A sheet-confirmed payment is the source of truth in the current
+            # MVP. Queue one invite job for this paid period; the worker later
+            # creates personal links for the configured group and channel.
+            db.execute(
+                "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+                (
+                    "telegram.invite",
+                    f"sheet-payment-{telegram_id}-{provider}-{paid_until}",
+                    json.dumps({"user_id": user["id"], "source": "sheet"}, ensure_ascii=False),
+                ),
+            )
         result.append({"telegram_id": telegram_id, "user_id": user["id"]})
     return result
