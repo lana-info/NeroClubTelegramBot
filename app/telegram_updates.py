@@ -192,6 +192,11 @@ async def process_update(
         text = "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
         try:
             if payment_source == "sheet":
+                if admin_telegram_ids:
+                    db.execute(
+                        "INSERT INTO support_requests(user_id, status) VALUES (?, 'awaiting_payment')",
+                        (user["id"],),
+                    )
                 text = (
                     "Оплата отмечается администратором в таблице.\n\n"
                     "Если вы хотите подтвердить оплату, напишите следующим сообщением:\n"
@@ -247,7 +252,7 @@ async def process_update(
                 await telegram.send_message(message_chat_id, text)
     elif message_text and not message_text.startswith("/"):
         pending = db.execute(
-            "SELECT id FROM support_requests WHERE user_id = ? AND status = 'awaiting_message' ORDER BY id DESC LIMIT 1",
+            "SELECT id, status FROM support_requests WHERE user_id = ? AND status IN ('awaiting_message', 'awaiting_payment') ORDER BY id DESC LIMIT 1",
             (user["id"],),
         ).fetchone()
         if pending and admin_telegram_ids:
@@ -255,8 +260,10 @@ async def process_update(
                 "UPDATE support_requests SET message_text = ?, status = 'new', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                 (message_text[:4000], pending["id"]),
             )
-            await _notify_admins(telegram, admin_telegram_ids, pending["id"], user, message_text[:4000])
-            await telegram.send_message(message_chat_id, "Сообщение отправлено администратору.", reply_markup=REPLY_KEYBOARD)
+            subject = "Подтверждение оплаты" if pending["status"] == "awaiting_payment" else "Новое обращение"
+            await _notify_admins(telegram, admin_telegram_ids, pending["id"], user, message_text[:4000], subject=subject)
+            confirmation = "Информация отправлена администратору." if pending["status"] == "awaiting_payment" else "Сообщение отправлено администратору."
+            await telegram.send_message(message_chat_id, confirmation, reply_markup=REPLY_KEYBOARD)
     db.execute("UPDATE inbox_events SET processed_at = CURRENT_TIMESTAMP WHERE provider = 'telegram' AND external_event_id = ?", (str(update_id),))
     return "processed"
 
@@ -348,9 +355,17 @@ def _display_user(username: str | None, telegram_id: int) -> str:
     return f"Telegram ID {telegram_id}"
 
 
-async def _notify_admins(telegram: TelegramClient, admin_ids: tuple[int, ...], request_id: int, user: sqlite3.Row, message_text: str) -> None:
+async def _notify_admins(
+    telegram: TelegramClient,
+    admin_ids: tuple[int, ...],
+    request_id: int,
+    user: sqlite3.Row,
+    message_text: str,
+    *,
+    subject: str = "Новое обращение",
+) -> None:
     text = (
-        f"🆘 Новое обращение #{request_id}\n"
+        f"🆘 {subject} #{request_id}\n"
         f"Пользователь: {_display_user(user['telegram_username'], user['telegram_id'])}\n"
         f"Telegram ID: {user['telegram_id']}\n\n"
         f"{message_text}\n\n"

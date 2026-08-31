@@ -87,11 +87,21 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
             payment_source="sheet",
             stripe_secret_key="sk_test_should_not_be_used",
             stripe_price_id="price_should_not_be_used",
+            admin_telegram_ids=(99,),
         )) == "processed"
 
     assert "отмечается администратором" in transport.calls[0]["text"]
     assert "хотите подтвердить оплату" in transport.calls[0]["text"]
     assert "stripe" not in transport.calls[0]["text"].lower()
+    confirmation = {
+        "update_id": 15,
+        "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "anna@example.com, 31 августа, Stripe"},
+    }
+    with db.connect() as connection:
+        assert asyncio.run(process_update(connection, confirmation, client, admin_telegram_ids=(99,))) == "processed"
+        assert connection.execute("SELECT status FROM support_requests").fetchone()[0] == "new"
+    assert "Информация отправлена администратору" in transport.calls[-1]["text"]
+    assert "Подтверждение оплаты" in transport.calls[-2]["text"]
 
 
 def test_user_can_send_support_request_and_admin_can_reply(tmp_path):
