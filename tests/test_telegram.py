@@ -69,6 +69,22 @@ def test_friendly_menu_button_is_mapped_to_command(tmp_path):
     assert "ключей" in transport.calls[0]["text"].lower()
 
 
+def test_status_uses_readable_russian_date(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'status-date.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {"update_id": 16, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/status"}}
+    with db.connect() as connection:
+        user = connection.execute("INSERT INTO users(telegram_id) VALUES (?) RETURNING id", (42,)).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) VALUES (?, 'sheet', 'sheet-42', 'active', 'paid', '2027-09-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        asyncio.run(process_update(connection, update, client))
+    assert "Доступ до: 1 сентября 2027 года" in transport.calls[0]["text"]
+
+
 def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'sheet-payments.db'}")
     db.init_schema()

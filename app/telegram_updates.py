@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from datetime import datetime
 from typing import Any
 
 from .access import effective_access, upsert_user
@@ -141,7 +142,7 @@ async def process_update(
         until = (subscription["provider_paid_until"] if subscription else None) or user["manual_access_until"]
         text = f"Статус: {'активна' if access == 'active' else 'не активна'}."
         if until:
-            text += f" Доступ до: {until}."
+            text += f" Доступ до: {format_subscription_date(until)}."
         await telegram.send_message(message_chat_id, text)
     elif command == "/help":
         await telegram.send_message(
@@ -353,6 +354,18 @@ def _display_user(username: str | None, telegram_id: int) -> str:
     if username:
         return username if username.startswith("@") else f"@{username}"
     return f"Telegram ID {telegram_id}"
+
+
+def format_subscription_date(value: str) -> str:
+    months = (
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    )
+    try:
+        date = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return value
+    return f"{date.day} {months[date.month - 1]} {date.year} года"
 
 
 async def _notify_admins(
