@@ -9,7 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 
 from .access import apply_command, effective_access, upsert_user
-from .keys import AppKeyError, create_app_key, revoke_app_key, sync_app_key_rows
+from .keys import AppKeyError, create_app_key, revoke_app_key, sync_app_key_rows, sync_license_rows
 from .config import settings
 from .db import Database
 from .webhooks import parse_event, verify_stripe_signature
@@ -159,6 +159,18 @@ def sync_keys(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[
     try:
         with db.connect() as connection:
             return sync_app_key_rows(connection, rows, settings.app_keys_encryption_key)
+    except AppKeyError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/licenses/sync")
+def sync_licenses(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[str, Any]:
+    rows = payload.get("rows")
+    if not isinstance(rows, list) or len(rows) > 500:
+        raise HTTPException(status_code=422, detail="rows must be a list with at most 500 items")
+    try:
+        with db.connect() as connection:
+            return sync_license_rows(connection, rows, settings.app_keys_encryption_key)
     except AppKeyError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

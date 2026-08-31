@@ -143,8 +143,10 @@ function writeBackendRows_(sheetName, endpoint) {
 }
 
 function syncAllSheets() {
+  ensureLicensesSheet();
   importCurrentSnapshot();
   syncSheetCommands_();
+  syncLicenses();
   syncSettings_();
   writeBackendRows_(USERS_SHEET, '/internal/sheets/users');
   writeBackendRows_(SITE_SHEET, '/internal/sheets/site-access');

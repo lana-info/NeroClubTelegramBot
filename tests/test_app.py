@@ -20,7 +20,7 @@ from app.membership import (
 )
 from app.stripe_checkout import create_checkout_session
 from app.reminders import send_subscription_reminders
-from app.keys import create_app_key, keys_for_user, sync_app_key_rows
+from app.keys import create_app_key, keys_for_user, sync_app_key_rows, sync_license_rows
 from app.sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
 from cryptography.fernet import Fernet
 
@@ -43,6 +43,44 @@ def test_schema_and_health_storage(tmp_path):
         assert connection.execute("SELECT 1").fetchone()[0] == 1
         user = upsert_user(connection, {"telegram_id": 123, "telegram_username": "anna"})
         assert user["telegram_id"] == 123
+
+
+def test_license_plan_keys_are_available_without_club_subscription(tmp_path):
+    db = database(tmp_path)
+    encryption_key = Fernet.generate_key().decode()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 1234})
+        create_app_key(connection, {
+            "key_id": "license-001", "app_name": "Clipart Generator",
+            "access_plan": "license", "key": "CG-TEST-LICENSE",
+            "user_id": user["id"], "status": "issued",
+        }, encryption_key)
+        keys = keys_for_user(connection, user["id"], encryption_key)
+
+    assert keys == [{
+        "app_name": "Clipart Generator",
+        "key": "CG-TEST-LICENSE",
+        "key_expires_at": None,
+    }]
+
+
+def test_license_sheet_can_assign_and_revoke_a_non_member_key(tmp_path):
+    db = database(tmp_path)
+    encryption_key = Fernet.generate_key().decode()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 5678})
+        result = sync_license_rows(connection, [{
+            "license_id": "srv-001", "product_id": "clipart-generator",
+            "app_name": "Clipart Generator", "license_key": "CG-OUTSIDE-001",
+            "telegram_id": 5678, "action": "issue",
+        }], encryption_key)
+        assert result == {"synced": 1, "revoked": 0, "errors": []}
+        assert keys_for_user(connection, user["id"], encryption_key)[0]["key"] == "CG-OUTSIDE-001"
+        revoked = sync_license_rows(connection, [{
+            "license_id": "srv-001", "action": "revoke",
+        }], encryption_key)
+        assert revoked == {"synced": 0, "revoked": 1, "errors": []}
+        assert keys_for_user(connection, user["id"], encryption_key) == []
 
 
 def test_sheet_command_is_idempotent(tmp_path):
@@ -129,6 +167,11 @@ def test_sheet_key_sync_issues_and_revokes_without_returning_secret(tmp_path):
     encryption_key = Fernet.generate_key().decode()
     with db.connect() as connection:
         user = upsert_user(connection, {"telegram_id": 1000})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'sheet', 'sub_app_sync', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
         result = sync_app_key_rows(connection, [{
             "key_id": "app-sync", "app_name": "Sync App", "key": "hidden-secret",
             "assigned_user_id": 1000, "status": "issued", "action": "issue",

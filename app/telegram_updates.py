@@ -198,7 +198,13 @@ async def process_update(
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
         ).fetchone()
-        if user["whitelist"] or effective_access(user, subscription) != "active":
+        has_explicit_license = bool(db.execute(
+            "SELECT 1 FROM app_keys WHERE assigned_user_id = ? AND access_plan = 'license' "
+            "AND status = 'issued' LIMIT 1", (user["id"],)
+        ).fetchone())
+        if (user["whitelist"] and not has_explicit_license) or (
+            effective_access(user, subscription) != "active" and not has_explicit_license
+        ):
             await telegram.send_message(
                 message_chat_id,
                 "Получение ключей приложений доступно только при оплаченной подписке на клуб.",

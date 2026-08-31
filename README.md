@@ -83,14 +83,22 @@ job still checks active access and creates a 24-hour, user-bound link.
 
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
 
+The `Лицензии` tab is for explicit licenses issued outside the club. One row is
+one Telegram user and one application; duplicate the row when a person needs
+both applications. Paste the license-server key into the row, choose `issue`,
+and wait for the next Sheets sync. The bot then shows it to that Telegram user
+through `Мои ключи`, even without a club subscription. Use `revoke` to remove
+that entitlement. Keep access to this tab limited to administrators because
+license keys are credentials.
+
 Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. Users can choose `💬 Связаться с администратором`; administrators receive the request and answer with `/reply REQUEST_ID TEXT`.
 
 After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_URL`, call the protected
 `/internal/telegram/setup-menu` endpoint once. It publishes the command list and
 sets Telegram `allowed_updates` to `message`, `chat_member` and `chat_join_request`.
 
-To connect the operational panel, copy `google-apps-script/SheetsSync.gs` and
-`google-apps-script/KeysSync.gs` into Extensions → Apps Script for the new
+To connect the operational panel, copy `google-apps-script/SheetsSync.gs`,
+`google-apps-script/KeysSync.gs` and `google-apps-script/LicensesSync.gs` into Extensions → Apps Script for the new
 spreadsheet. Set Script Properties `BACKEND_URL` and `ADMIN_API_TOKEN`. Run
 `importCurrentSnapshot()` once before the first pull sync; it imports users and
 subscription dates and replaces legacy `user_id` values with backend IDs. Then

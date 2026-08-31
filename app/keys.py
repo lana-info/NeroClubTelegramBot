@@ -147,7 +147,14 @@ def keys_for_user(db: sqlite3.Connection, user_id: int, encryption_key: str) -> 
     subscription = db.execute(
         "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
     ).fetchone()
-    if not user or effective_access(user, subscription) != "active":
+    if not user:
+        return []
+    club_access = effective_access(user, subscription) == "active"
+    licensed_access = bool(db.execute(
+        "SELECT 1 FROM app_keys WHERE assigned_user_id = ? AND access_plan = 'license' "
+        "AND status = 'issued' LIMIT 1", (user_id,)
+    ).fetchone())
+    if not club_access and not licensed_access:
         return []
     rows = db.execute(
         "SELECT * FROM app_keys WHERE assigned_user_id = ? AND status = 'issued' ORDER BY app_name, id",
@@ -167,6 +174,73 @@ def keys_for_user(db: sqlite3.Connection, user_id: int, encryption_key: str) -> 
             "key_expires_at": row["key_expires_at"],
         })
     return result
+
+
+def sync_license_rows(
+    db: sqlite3.Connection,
+    rows: list[dict[str, Any]],
+    encryption_key: str,
+) -> dict[str, Any]:
+    """Assign manually generated license-server keys to Telegram users.
+
+    License rows are explicit grants and therefore intentionally bypass the
+    club-subscription check used by the regular app-key tab.
+    """
+    synced = revoked = 0
+    errors: list[dict[str, Any]] = []
+    for row_number, payload in enumerate(rows, start=2):
+        try:
+            action = str(payload.get("action") or "none").lower()
+            license_id = str(payload.get("license_id") or "").strip()
+            if action == "none":
+                continue
+            if not license_id:
+                raise ValueError("license_id is required")
+            key_id = f"license-{license_id}"
+            if action == "revoke" or str(payload.get("status") or "").lower() == "revoked":
+                revoke_app_key(db, key_id)
+                revoked += 1
+                continue
+            if action != "issue":
+                raise ValueError("unsupported action")
+            license_key = payload.get("license_key")
+            product_id = str(payload.get("product_id") or "").strip()
+            if not isinstance(license_key, str) or not license_key.strip():
+                raise ValueError("license_key is required")
+            if not product_id:
+                raise ValueError("product_id is required")
+            telegram_id = payload.get("telegram_id")
+            if telegram_id in (None, ""):
+                raise ValueError("telegram_id is required")
+            try:
+                telegram_id = int(telegram_id)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("telegram_id must be a number") from exc
+            assigned_user = db.execute(
+                "SELECT id FROM users WHERE telegram_id = ?", (telegram_id,)
+            ).fetchone()
+            if assigned_user:
+                assigned_user_id = int(assigned_user["id"])
+            else:
+                from .access import upsert_user
+                assigned_user_id = int(upsert_user(db, {
+                    "telegram_id": telegram_id,
+                    "telegram_username": payload.get("username"),
+                    "wordpress_email": payload.get("email"),
+                })["id"])
+            create_app_key(db, {
+                "key_id": key_id,
+                "app_name": payload.get("app_name") or product_id,
+                "access_plan": "license",
+                "key": license_key,
+                "key_expires_at": payload.get("expires_at") or None,
+                "user_id": assigned_user_id,
+                "status": "issued",
+            }, encryption_key)
+            synced += 1
+        except (AppKeyError, ValueError, TypeError) as exc:
+            errors.append({"row": row_number, "license_id": payload.get("license_id"), "error": str(exc)})
+    return {"synced": synced, "revoked": revoked, "errors": errors}
 
 
 def display_expiry(value: str | None) -> str:
