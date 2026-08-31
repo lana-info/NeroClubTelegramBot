@@ -28,6 +28,7 @@ class Settings:
         os.getenv("STRIPE_SIGNATURE_TOLERANCE_SECONDS", "300")
     )
     dry_run: bool = os.getenv("DRY_RUN", "true").lower() == "true"
+    reminders_dry_run: bool = os.getenv("REMINDERS_DRY_RUN", "false").lower() == "true"
     grace_period_days: int = int(os.getenv("GRACE_PERIOD_DAYS", "3"))
     telegram_bot_token: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
     telegram_webhook_secret: str = os.getenv("TELEGRAM_WEBHOOK_SECRET", "")

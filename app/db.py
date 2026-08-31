@@ -167,6 +167,15 @@ class Database:
                     used_at TEXT
                 );
 
+                CREATE TABLE IF NOT EXISTS telegram_removal_warnings (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL REFERENCES users(id),
+                    chat_id TEXT NOT NULL,
+                    warning_date TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, chat_id, warning_date)
+                );
+
                 CREATE TABLE IF NOT EXISTS feature_flags (
                     name TEXT PRIMARY KEY,
                     enabled INTEGER NOT NULL DEFAULT 1,

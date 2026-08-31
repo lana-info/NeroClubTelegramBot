@@ -297,6 +297,8 @@ async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
                 connection, telegram, chat_id, dry_run=settings.dry_run,
                 removal_enabled=removal_enabled,
                 site_deactivation_enabled=get_flags(connection)["wordpress_deactivation"],
+                admin_telegram_ids=settings.admin_telegram_ids,
+                chat_label="канале" if chat_id == settings.telegram_channel_id else "группе",
             )
             for key in totals:
                 totals[key] += result[key]
@@ -355,7 +357,7 @@ async def send_reminders(_: str = Depends(require_admin)) -> dict[str, int]:
             connection,
             telegram,
             payment_url=settings.payment_url if settings.payment_source != "sheet" else "",
-            dry_run=settings.dry_run,
+            dry_run=settings.reminders_dry_run,
         )
 
 

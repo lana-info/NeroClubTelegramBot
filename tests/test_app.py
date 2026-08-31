@@ -263,6 +263,60 @@ def test_reconciliation_can_check_the_special_channel(tmp_path):
         assert telegram.banned == [("-100777", 77)]
 
 
+def test_reconciliation_warns_admin_one_day_before_removal(tmp_path):
+    class FakeTelegram:
+        def __init__(self):
+            self.messages = []
+            self.banned = []
+
+        async def get_chat_member(self, chat_id, user_id):
+            return {"status": "member"}
+
+        async def send_message(self, chat_id, text):
+            self.messages.append((chat_id, text))
+
+        async def ban_chat_member(self, chat_id, user_id):
+            self.banned.append((chat_id, user_id))
+
+    db = database(tmp_path)
+    telegram = FakeTelegram()
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 88, "telegram_username": "expired_user"})
+        first = asyncio.run(
+            reconcile_members(
+                connection,
+                telegram,
+                "-100",
+                dry_run=False,
+                admin_telegram_ids=(99,),
+                chat_label="тестовой группе",
+            )
+        )
+        assert first["removed"] == 0
+        assert telegram.banned == []
+        assert telegram.messages[0][0] == 99
+        assert "@expired_user" in telegram.messages[0][1]
+        assert "88" in telegram.messages[0][1]
+
+        connection.execute(
+            "UPDATE telegram_removal_warnings SET warning_date = '2020-01-01' "
+            "WHERE user_id = ? AND chat_id = '-100'",
+            (user["id"],),
+        )
+        second = asyncio.run(
+            reconcile_members(
+                connection,
+                telegram,
+                "-100",
+                dry_run=False,
+                admin_telegram_ids=(99,),
+                chat_label="тестовой группе",
+            )
+        )
+        assert second["removed"] == 1
+        assert telegram.banned == [("-100", 88)]
+
+
 def test_subscription_reminder_is_sent_once_for_seven_day_expiry(tmp_path):
     class FakeTelegram:
         def __init__(self):

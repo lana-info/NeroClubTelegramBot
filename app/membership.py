@@ -54,6 +54,55 @@ def _active_member_status(status: str | None) -> bool:
     return status in {"member", "restricted", "administrator", "creator"}
 
 
+def _telegram_user_label(user: sqlite3.Row) -> str:
+    username = (user["telegram_username"] or "").strip().lstrip("@")
+    return f"@{username}" if username else "без username"
+
+
+async def _warn_before_removal(
+    db: sqlite3.Connection,
+    telegram: TelegramClient,
+    user: sqlite3.Row,
+    chat_id: int | str,
+    *,
+    admin_telegram_ids: tuple[int, ...],
+    chat_label: str,
+) -> bool:
+    """Send one warning per day and return whether a previous warning exists."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    previous = db.execute(
+        "SELECT 1 FROM telegram_removal_warnings WHERE user_id = ? AND chat_id = ? "
+        "AND warning_date < ? LIMIT 1",
+        (user["id"], str(chat_id), today),
+    ).fetchone()
+    if previous:
+        return True
+    already_sent = db.execute(
+        "SELECT 1 FROM telegram_removal_warnings WHERE user_id = ? AND chat_id = ? "
+        "AND warning_date = ? LIMIT 1",
+        (user["id"], str(chat_id), today),
+    ).fetchone()
+    if already_sent:
+        return False
+    if not admin_telegram_ids:
+        return False
+    text = (
+        "⚠️ Предупреждение об удалении\n\n"
+        f"Пользователь: {_telegram_user_label(user)}\n"
+        f"Telegram ID: {user['telegram_id']}\n"
+        f"Место: в {chat_label}\n\n"
+        "Подписка не отмечена как активная. Если до следующей ежедневной проверки "
+        "оплата не будет отмечена в таблице, пользователь будет удалён."
+    )
+    for admin_id in admin_telegram_ids:
+        await telegram.send_message(admin_id, text)
+    db.execute(
+        "INSERT OR IGNORE INTO telegram_removal_warnings(user_id, chat_id, warning_date) VALUES (?, ?, ?)",
+        (user["id"], str(chat_id), today),
+    )
+    return False
+
+
 async def process_pending_telegram_invite_jobs(
     db: sqlite3.Connection,
     telegram: TelegramClient,
@@ -217,6 +266,8 @@ async def reconcile_members(
     dry_run: bool,
     removal_enabled: bool = True,
     site_deactivation_enabled: bool = True,
+    admin_telegram_ids: tuple[int, ...] | None = None,
+    chat_label: str = "чате",
 ) -> dict[str, int]:
     users = db.execute("SELECT * FROM users WHERE telegram_id IS NOT NULL").fetchall()
     checked = active = denied = removed = would_remove = failed = 0
@@ -235,6 +286,10 @@ async def reconcile_members(
             checked += 1
             if access == "active":
                 active += 1
+                db.execute(
+                    "DELETE FROM telegram_removal_warnings WHERE user_id = ? AND chat_id = ?",
+                    (user["id"], str(chat_id)),
+                )
                 if member_status == "left" and site_deactivation_enabled:
                     queue_site_access_job(db, user["id"], "deactivate", f"reconcile-left-{user['id']}")
             else:
@@ -243,6 +298,17 @@ async def reconcile_members(
                     if dry_run:
                         would_remove += 1
                     else:
+                        if admin_telegram_ids is not None:
+                            warned_before = await _warn_before_removal(
+                                db,
+                                telegram,
+                                user,
+                                chat_id,
+                                admin_telegram_ids=admin_telegram_ids,
+                                chat_label=chat_label,
+                            )
+                            if not warned_before:
+                                continue
                         db.execute(
                             "UPDATE users SET telegram_ban_source = 'system', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                             (user["id"],),
