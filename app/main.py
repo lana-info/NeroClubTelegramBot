@@ -240,6 +240,8 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 admin_telegram_ids=settings.admin_telegram_ids,
                 payment_url=settings.payment_url,
                 payment_source=settings.payment_source,
+                new_member_price_usd=settings.new_member_price_usd,
+                returning_member_price_usd=settings.returning_member_price_usd,
                 stripe_secret_key=settings.stripe_secret_key,
                 stripe_price_id=settings.stripe_price_id,
                 checkout_success_url=settings.checkout_success_url,

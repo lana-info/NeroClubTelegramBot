@@ -40,6 +40,8 @@ class Settings:
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")
     app_keys_encryption_key: str = os.getenv("APP_KEYS_ENCRYPTION_KEY", "")
     payment_url: str = os.getenv("PAYMENT_URL", "")
+    new_member_price_usd: str = os.getenv("NEW_MEMBER_PRICE_USD", "20")
+    returning_member_price_usd: str = os.getenv("RETURNING_MEMBER_PRICE_USD", "10")
 
 
 settings = Settings()

@@ -28,6 +28,8 @@ async def process_update(
     admin_telegram_ids: tuple[int, ...] = (),
     payment_url: str = "",
     payment_source: str = "sheet",
+    new_member_price_usd: str = "20",
+    returning_member_price_usd: str = "10",
     stripe_secret_key: str = "",
     stripe_price_id: str = "",
     checkout_success_url: str = "",
@@ -202,6 +204,12 @@ async def process_update(
         text = "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
         try:
             if payment_source == "sheet":
+                has_paid_history = db.execute(
+                    "SELECT 1 FROM subscriptions WHERE user_id = ? "
+                    "AND (payment_status = 'paid' OR provider_paid_until IS NOT NULL) LIMIT 1",
+                    (user["id"],),
+                ).fetchone() is not None
+                price = returning_member_price_usd if has_paid_history else new_member_price_usd
                 if admin_telegram_ids:
                     db.execute(
                         "INSERT INTO support_requests(user_id, status) VALUES (?, 'awaiting_payment')",
@@ -209,6 +217,7 @@ async def process_update(
                     )
                 text = (
                     "Оплата отмечается администратором в таблице.\n\n"
+                    f"Сумма к оплате: {price} USD.\n\n"
                     "Если вы хотите подтвердить оплату, напишите следующим сообщением:\n"
                     "• email, который использовали при оплате;\n"
                     "• дату оплаты;\n"

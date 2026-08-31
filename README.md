@@ -66,6 +66,9 @@ Telegram access operations are available to the admin API as `/internal/users/{u
 
 The reminder endpoint is `/internal/jobs/send-reminders`. Run it once per day from the server scheduler. It is idempotent and sends only to users who enabled reminders in the bot. Use `REMINDERS_DRY_RUN=true` for reminder preview mode; it is separate from removal `DRY_RUN`. Set `PAYMENT_URL` when a payment page is available.
 
+In sheet payment mode, `/pay` shows `NEW_MEMBER_PRICE_USD` to a user without
+confirmed payment history and `RETURNING_MEMBER_PRICE_USD` to a returning user.
+
 The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe, site-access, personal Telegram invites and expired invite revocation hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
 
 Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
