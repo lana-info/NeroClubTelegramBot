@@ -92,12 +92,15 @@ def test_user_can_toggle_reminders(tmp_path):
     client = TelegramClient("test-token", transport=transport)
     update_on = {"update_id": 17, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/reminders_on"}}
     update_off = {"update_id": 18, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "🔕 Выключить напоминания"}}
+    update_toggle = {"update_id": 20, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "🔔 Уведомления об оплате"}}
     with db.connect() as connection:
         asyncio.run(process_update(connection, update_on, client))
         assert connection.execute("SELECT reminders_enabled FROM users WHERE telegram_id = 42").fetchone()[0] == 1
         asyncio.run(process_update(connection, update_off, client))
         assert connection.execute("SELECT reminders_enabled FROM users WHERE telegram_id = 42").fetchone()[0] == 0
-    assert "выключены" in transport.calls[-1]["text"].lower()
+        asyncio.run(process_update(connection, update_toggle, client))
+        assert connection.execute("SELECT reminders_enabled FROM users WHERE telegram_id = 42").fetchone()[0] == 1
+    assert "включены" in transport.calls[-1]["text"].lower()
 
 
 def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
