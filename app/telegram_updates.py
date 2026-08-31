@@ -155,7 +155,7 @@ async def process_update(
             reply_markup=REPLY_KEYBOARD,
         )
     elif command == "/support":
-        parts = message_text.split(maxsplit=1)
+        parts = message_text.split(maxsplit=1) if message_text.startswith("/") else [message_text]
         if not admin_telegram_ids:
             text = "Связь с администратором пока не настроена."
         elif len(parts) == 1:
@@ -193,8 +193,11 @@ async def process_update(
         try:
             if payment_source == "sheet":
                 text = (
-                    "Оплата отмечается администратором в таблице. "
-                    "Чтобы найти оплату, отправьте администратору email, дату и способ оплаты. "
+                    "Оплата отмечается администратором в таблице.\n\n"
+                    "Чтобы я нашла ваш платёж, отправьте следующим сообщением:\n"
+                    "• email, который использовали при оплате;\n"
+                    "• дату оплаты;\n"
+                    "• способ оплаты: Stripe или PayPal.\n\n"
                     "Скриншот не нужен."
                 )
             elif stripe_secret_key and stripe_price_id:

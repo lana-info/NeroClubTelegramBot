@@ -111,6 +111,27 @@ def test_user_can_send_support_request_and_admin_can_reply(tmp_path):
     assert any(call["chat_id"] == 42 and "Ответ администратора" in call["text"] for call in transport.calls)
 
 
+def test_support_button_asks_for_message_before_sending(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'support-button.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {
+        "update_id": 23,
+        "message": {
+            "chat": {"id": 42},
+            "from": {"id": 42, "username": "anna"},
+            "text": "💬 Связаться с администратором",
+        },
+    }
+
+    with db.connect() as connection:
+        asyncio.run(process_update(connection, update, client, admin_telegram_ids=(99,)))
+        assert "Напишите следующим сообщением" in transport.calls[0]["text"]
+        assert connection.execute("SELECT COUNT(*) FROM support_requests").fetchone()[0] == 1
+        assert connection.execute("SELECT status FROM support_requests").fetchone()[0] == "awaiting_message"
+
+
 def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'site-access.db'}")
     db.init_schema()
