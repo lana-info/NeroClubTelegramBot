@@ -7,6 +7,14 @@
  * issue or revoke. Keys are sent by the bot through "Мои ключи" after sync.
  */
 const LICENSE_SHEET_NAME = 'Лицензии';
+const LICENSES_BACKEND_URL_PROPERTY = 'BACKEND_URL';
+const LICENSES_ADMIN_TOKEN_PROPERTY = 'ADMIN_API_TOKEN';
+
+function licenseHeaderIndex_(headers) {
+  const result = {};
+  headers.forEach(function(header, column) { result[header] = column; });
+  return result;
+}
 
 function ensureLicensesSheet() {
   const spreadsheet = SpreadsheetApp.getActive();
@@ -29,14 +37,14 @@ function ensureLicensesSheet() {
 
 function syncLicenses() {
   const properties = PropertiesService.getScriptProperties();
-  const backendUrl = properties.getProperty(BACKEND_URL_PROPERTY);
-  const adminToken = properties.getProperty(ADMIN_TOKEN_PROPERTY);
+  const backendUrl = properties.getProperty(LICENSES_BACKEND_URL_PROPERTY);
+  const adminToken = properties.getProperty(LICENSES_ADMIN_TOKEN_PROPERTY);
   if (!backendUrl || !adminToken) throw new Error('BACKEND_URL and ADMIN_API_TOKEN are required');
 
   const sheet = ensureLicensesSheet();
   const values = sheet.getDataRange().getDisplayValues();
   if (values.length < 2) return;
-  const index = headerIndex_(values[0]);
+  const index = licenseHeaderIndex_(values[0]);
   ['license_id', 'telegram_id', 'product_id', 'license_key', 'status', 'action', 'last_result']
     .forEach(function(header) {
       if (index[header] === undefined) throw new Error('Missing header in ' + LICENSE_SHEET_NAME + ': ' + header);
