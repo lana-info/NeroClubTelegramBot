@@ -317,6 +317,25 @@ def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
     assert "30.09.2999" in telegram_transport.calls[0]["text"]
 
 
+def test_my_keys_requires_paid_subscription_and_rejects_whitelist(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'keys-access.db'}")
+    db.init_schema()
+    telegram_transport = TelegramTransport()
+    telegram = TelegramClient("test-token", transport=telegram_transport)
+    update = {"update_id": 26, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/my-keys"}}
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, whitelist) VALUES (?, 1) RETURNING id", (42,)
+        ).fetchone()
+        create_app_key(connection, {
+            "key_id": "whitelist-key", "app_name": "Example App", "key": "must-not-show",
+            "user_id": user["id"],
+        }, Fernet.generate_key().decode())
+        assert asyncio.run(process_update(connection, update, telegram)) == "processed"
+    assert "оплаченной подписке" in telegram_transport.calls[0]["text"]
+    assert "must-not-show" not in telegram_transport.calls[0]["text"]
+
+
 def _chat_member_update(update_id, telegram_id, status, chat_id=-100):
     return {
         "update_id": update_id,

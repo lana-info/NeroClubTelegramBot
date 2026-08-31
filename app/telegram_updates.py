@@ -195,6 +195,15 @@ async def process_update(
         if not feature_flags.get("app_keys", True):
             await telegram.send_message(message_chat_id, "Выдача ключей временно приостановлена администратором.")
             return "processed"
+        subscription = db.execute(
+            "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
+        ).fetchone()
+        if user["whitelist"] or effective_access(user, subscription) != "active":
+            await telegram.send_message(
+                message_chat_id,
+                "Получение ключей приложений доступно только при оплаченной подписке на клуб.",
+            )
+            return "processed"
         try:
             keys = keys_for_user(db, user["id"], app_keys_encryption_key)
         except (AppKeyError, ValueError):
