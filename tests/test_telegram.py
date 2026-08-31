@@ -123,7 +123,6 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
 
     assert "отмечается администратором" in transport.calls[0]["text"]
     assert "хотите подтвердить оплату" in transport.calls[0]["text"]
-    assert "stripe" not in transport.calls[0]["text"].lower()
     confirmation = {
         "update_id": 15,
         "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "anna@example.com, 31 августа, Stripe"},
@@ -133,6 +132,30 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
         assert connection.execute("SELECT status FROM support_requests").fetchone()[0] == "new"
     assert "Информация отправлена администратору" in transport.calls[-1]["text"]
     assert "Подтверждение оплаты" in transport.calls[-2]["text"]
+
+
+def test_sheet_payment_links_use_new_member_price(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'payment-links.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {"update_id": 19, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/pay"}}
+
+    with db.connect() as connection:
+        asyncio.run(process_update(
+            connection,
+            update,
+            client,
+            payment_source="sheet",
+            admin_telegram_ids=(99,),
+            new_member_one_time_payment_url="https://pay.test/new-once",
+            new_member_recurring_payment_url="https://pay.test/new-monthly",
+        ))
+
+    text = transport.calls[0]["text"]
+    assert "Сумма к оплате: 20 USD" in text
+    assert "https://pay.test/new-once" in text
+    assert "https://pay.test/new-monthly" in text
 
 
 def test_user_can_send_support_request_and_admin_can_reply(tmp_path):

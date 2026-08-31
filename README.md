@@ -69,6 +69,7 @@ The reminder endpoint is `/internal/jobs/send-reminders`. Run it once per day fr
 
 In sheet payment mode, `/pay` shows `NEW_MEMBER_PRICE_USD` to a user without
 confirmed payment history and `RETURNING_MEMBER_PRICE_USD` to a returning user.
+It also shows separate one-time and recurring payment links for each category.
 
 The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe, site-access, personal Telegram invites and expired invite revocation hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
 

@@ -30,6 +30,10 @@ async def process_update(
     payment_source: str = "sheet",
     new_member_price_usd: str = "20",
     returning_member_price_usd: str = "10",
+    new_member_one_time_payment_url: str = "",
+    new_member_recurring_payment_url: str = "",
+    returning_member_one_time_payment_url: str = "",
+    returning_member_recurring_payment_url: str = "",
     stripe_secret_key: str = "",
     stripe_price_id: str = "",
     checkout_success_url: str = "",
@@ -210,6 +214,14 @@ async def process_update(
                     (user["id"],),
                 ).fetchone() is not None
                 price = returning_member_price_usd if has_paid_history else new_member_price_usd
+                one_time_url = (
+                    returning_member_one_time_payment_url
+                    if has_paid_history else new_member_one_time_payment_url
+                )
+                recurring_url = (
+                    returning_member_recurring_payment_url
+                    if has_paid_history else new_member_recurring_payment_url
+                )
                 if admin_telegram_ids:
                     db.execute(
                         "INSERT INTO support_requests(user_id, status) VALUES (?, 'awaiting_payment')",
@@ -218,6 +230,10 @@ async def process_update(
                 text = (
                     "Оплата отмечается администратором в таблице.\n\n"
                     f"Сумма к оплате: {price} USD.\n\n"
+                    "Выберите способ оплаты:\n"
+                    f"• Разовая оплата: {one_time_url or 'ссылка будет добавлена администратором'}\n"
+                    f"• Подписка с ежемесячным автосписанием (можно отменить в любое время): "
+                    f"{recurring_url or 'ссылка будет добавлена администратором'}\n\n"
                     "Если вы хотите подтвердить оплату, напишите следующим сообщением:\n"
                     "• email, который использовали при оплате;\n"
                     "• дату оплаты;\n"

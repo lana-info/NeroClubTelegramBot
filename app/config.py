@@ -42,6 +42,10 @@ class Settings:
     payment_url: str = os.getenv("PAYMENT_URL", "")
     new_member_price_usd: str = os.getenv("NEW_MEMBER_PRICE_USD", "20")
     returning_member_price_usd: str = os.getenv("RETURNING_MEMBER_PRICE_USD", "10")
+    new_member_one_time_payment_url: str = os.getenv("NEW_MEMBER_ONE_TIME_PAYMENT_URL", "")
+    new_member_recurring_payment_url: str = os.getenv("NEW_MEMBER_RECURRING_PAYMENT_URL", "")
+    returning_member_one_time_payment_url: str = os.getenv("RETURNING_MEMBER_ONE_TIME_PAYMENT_URL", "")
+    returning_member_recurring_payment_url: str = os.getenv("RETURNING_MEMBER_RECURRING_PAYMENT_URL", "")
 
 
 settings = Settings()
