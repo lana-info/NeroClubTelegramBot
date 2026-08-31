@@ -131,10 +131,11 @@ def test_sheet_key_sync_issues_and_revokes_without_returning_secret(tmp_path):
         user = upsert_user(connection, {"telegram_id": 1000})
         result = sync_app_key_rows(connection, [{
             "key_id": "app-sync", "app_name": "Sync App", "key": "hidden-secret",
-            "assigned_user_id": user["id"], "status": "issued", "action": "issue",
+            "assigned_user_id": 1000, "status": "issued", "action": "issue",
         }], encryption_key)
         assert result == {"synced": 1, "revoked": 0, "errors": []}
         assert "hidden-secret" not in json.dumps(result)
+        assert keys_for_user(connection, user["id"], encryption_key)[0]["key"] == "hidden-secret"
         result = sync_app_key_rows(connection, [{"key_id": "app-sync", "action": "revoke"}], encryption_key)
         assert result == {"synced": 0, "revoked": 1, "errors": []}
 

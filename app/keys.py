@@ -110,11 +110,29 @@ def sync_app_key_rows(
                 continue
             if action != "issue":
                 raise ValueError("unsupported action")
-            create_app_key(db, payload, encryption_key)
+            normalized = dict(payload)
+            normalized["user_id"] = _resolve_assigned_user_id(db, payload.get("assigned_user_id"))
+            create_app_key(db, normalized, encryption_key)
             synced += 1
         except (AppKeyError, ValueError, TypeError) as exc:
             errors.append({"row": row_number, "key_id": payload.get("key_id"), "error": str(exc)})
     return {"synced": synced, "revoked": revoked, "errors": errors}
+
+
+def _resolve_assigned_user_id(db: sqlite3.Connection, value: Any) -> int | None:
+    if value in (None, ""):
+        return None
+    try:
+        numeric_value = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("assigned_user_id must be a number") from exc
+    by_internal_id = db.execute("SELECT id FROM users WHERE id = ?", (numeric_value,)).fetchone()
+    if by_internal_id:
+        return int(by_internal_id["id"])
+    by_telegram_id = db.execute("SELECT id FROM users WHERE telegram_id = ?", (numeric_value,)).fetchone()
+    if by_telegram_id:
+        return int(by_telegram_id["id"])
+    raise ValueError("assigned user not found")
 
 
 def revoke_app_key(db: sqlite3.Connection, external_key_id: str) -> None:
