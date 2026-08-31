@@ -300,7 +300,10 @@ async def process_update(
                 await telegram.send_message(message_chat_id, text)
     elif message_text and not message_text.startswith("/"):
         pending = db.execute(
-            "SELECT id, status FROM support_requests WHERE user_id = ? AND status IN ('awaiting_message', 'awaiting_payment') ORDER BY id DESC LIMIT 1",
+            "SELECT id, status FROM support_requests "
+            "WHERE user_id = ? AND status IN ('awaiting_message', 'awaiting_payment') "
+            "AND updated_at >= datetime('now', '-10 minutes') "
+            "ORDER BY id DESC LIMIT 1",
             (user["id"],),
         ).fetchone()
         if pending and admin_telegram_ids:

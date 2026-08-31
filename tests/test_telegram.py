@@ -220,6 +220,51 @@ def test_support_button_asks_for_message_before_sending(tmp_path):
         assert connection.execute("SELECT status FROM support_requests").fetchone()[0] == "awaiting_message"
 
 
+def test_unsolicited_private_message_is_not_forwarded_to_admin(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'unsolicited-message.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {
+        "update_id": 24,
+        "message": {
+            "chat": {"id": 42},
+            "from": {"id": 42, "username": "anna"},
+            "text": "Привет, это обычное сообщение",
+        },
+    }
+
+    with db.connect() as connection:
+        assert asyncio.run(process_update(connection, update, client, admin_telegram_ids=(99,))) == "processed"
+
+    assert transport.calls == []
+
+
+def test_stale_support_prompt_does_not_capture_unsolicited_message(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'stale-support.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {
+        "update_id": 25,
+        "message": {
+            "chat": {"id": 42},
+            "from": {"id": 42, "username": "anna"},
+            "text": "Сообщение спустя много времени",
+        },
+    }
+
+    with db.connect() as connection:
+        user = connection.execute("INSERT INTO users(telegram_id) VALUES (?) RETURNING id", (42,)).fetchone()
+        connection.execute(
+            "INSERT INTO support_requests(user_id, status, updated_at) VALUES (?, 'awaiting_message', '2020-01-01 00:00:00')",
+            (user["id"],),
+        )
+        assert asyncio.run(process_update(connection, update, client, admin_telegram_ids=(99,))) == "processed"
+
+    assert transport.calls == []
+
+
 def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'site-access.db'}")
     db.init_schema()
