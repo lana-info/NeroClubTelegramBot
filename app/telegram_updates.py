@@ -72,6 +72,10 @@ async def process_update(
         )
 
     message = update.get("message") or {}
+    message_chat = message.get("chat") or {}
+    if message_chat.get("type") and message_chat.get("type") != "private":
+        _mark_telegram_update_processed(db, update_id)
+        return "ignored"
     sender = message.get("from") or {}
     telegram_id = sender.get("id")
     if not isinstance(telegram_id, int):
@@ -80,7 +84,7 @@ async def process_update(
         db,
         {"telegram_id": telegram_id, "telegram_username": sender.get("username")},
     )
-    message_chat_id = (message.get("chat") or {}).get("id", telegram_id)
+    message_chat_id = message_chat.get("id", telegram_id)
     message_text = message.get("text") or ""
     command = command_from_text(message.get("text"))
     is_admin = telegram_id in admin_telegram_ids

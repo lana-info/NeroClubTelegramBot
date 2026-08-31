@@ -103,6 +103,25 @@ def test_user_can_toggle_reminders(tmp_path):
     assert "включены" in transport.calls[-1]["text"].lower()
 
 
+def test_group_messages_do_not_receive_the_private_menu(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'group-messages.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    client = TelegramClient("test-token", transport=transport)
+    update = {
+        "update_id": 21,
+        "message": {
+            "chat": {"id": -100, "type": "supergroup"},
+            "from": {"id": 42},
+            "text": "/start",
+        },
+    }
+
+    with db.connect() as connection:
+        assert asyncio.run(process_update(connection, update, client)) == "ignored"
+    assert transport.calls == []
+
+
 def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'sheet-payments.db'}")
     db.init_schema()
