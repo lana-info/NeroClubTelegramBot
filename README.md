@@ -29,7 +29,8 @@ The first vertical slice contains:
 - protected `/internal/jobs/process-site-access` worker endpoint for queued site-access delivery;
 - protected personal invite endpoint and dry-run Telegram membership reconciliation;
 - Telegram join requests are approved only for the matching user and unexpired
-  stored invite; expired invite links are revoked by a scheduled worker;
+  stored invite; personal invite links are valid for 24 hours and expired links
+  are revoked by a scheduled worker;
 - protected subscription reminder job for 7-day, 3-day and 1-day notifications;
 - health endpoint;
 - Docker configuration;

@@ -14,6 +14,9 @@ class MembershipError(RuntimeError):
     pass
 
 
+INVITE_LIFETIME = timedelta(hours=24)
+
+
 async def create_personal_invite(
     db: sqlite3.Connection,
     user_id: int,
@@ -32,7 +35,7 @@ async def create_personal_invite(
         raise MembershipError("invite requires active access")
     if dry_run:
         return {"user_id": user_id, "status": "dry_run", "invite_link": None}
-    expire_date = int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp())
+    expire_date = int((datetime.now(timezone.utc) + INVITE_LIFETIME).timestamp())
     result = await telegram.create_chat_invite_link(
         chat_id, expire_date=expire_date, creates_join_request=True
     )
@@ -47,7 +50,7 @@ async def create_personal_invite(
         "INSERT INTO audit_log(actor, action, user_id, details) VALUES (?, ?, ?, ?)",
         ("telegram", "telegram.invite_created", user_id, "personal join-request invite created"),
     )
-    return {"user_id": user_id, "status": "created", "invite_link": link, "expires_in_minutes": 15}
+    return {"user_id": user_id, "status": "created", "invite_link": link, "expires_in_hours": 24}
 
 
 def _active_member_status(status: str | None) -> bool:
@@ -131,7 +134,7 @@ async def process_pending_telegram_invite_jobs(
             if effective_access(user, subscription) != "active":
                 raise MembershipError("invite requires active access")
             links = []
-            expire_date = int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp())
+            expire_date = int((datetime.now(timezone.utc) + INVITE_LIFETIME).timestamp())
             for target_chat_id in chat_ids:
                 member = await telegram.get_chat_member(target_chat_id, user["telegram_id"])
                 member_status = member.get("status") if isinstance(member, dict) else None
@@ -151,7 +154,8 @@ async def process_pending_telegram_invite_jobs(
             if links:
                 await telegram.send_message(
                     user["telegram_id"],
-                    "Оплата подтверждена. Используйте персональную ссылку для вступления:\n"
+                    "Оплата подтверждена. Используйте персональную ссылку для вступления "
+                    "в течение 24 часов:\n"
                     + "\n".join(links),
                 )
             db.execute(
@@ -363,7 +367,7 @@ async def process_pending_telegram_restore_jobs(
                 await telegram.unban_chat_member(target_chat_id, user["telegram_id"])
                 invite_result = await telegram.create_chat_invite_link(
                     target_chat_id,
-                    expire_date=int((datetime.now(timezone.utc) + timedelta(minutes=15)).timestamp()),
+                    expire_date=int((datetime.now(timezone.utc) + INVITE_LIFETIME).timestamp()),
                     creates_join_request=True,
                 )
                 invite_link = invite_result.get("invite_link") if isinstance(invite_result, dict) else None
