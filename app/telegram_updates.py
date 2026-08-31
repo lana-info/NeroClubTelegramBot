@@ -165,7 +165,8 @@ async def process_update(
             "📊 Статус подписки — текущий доступ и дата окончания\n"
             "🔑 Мои ключи — ключи приложений\n"
             "🌐 Доступ к сайту — логин и постоянный пароль\n"
-            "🧾 Сообщить об оплате — отправить данные платежа\n"
+            "💳 Получить ссылку на оплату — выбрать разовую или ежемесячную оплату\n"
+            "🧾 Сообщить об оплате — отправить данные платежа администратору\n"
             "🔔/🔕 Напоминания — включить или выключить уведомления\n"
             "ℹ️ Помощь — эта подсказка",
             reply_markup=REPLY_KEYBOARD,
@@ -204,7 +205,24 @@ async def process_update(
                 items.append(f"{item['app_name']}\nКлюч: {item['key']}\nДействует до: {expires}")
             text = "Ваши ключи приложений:\n\n" + "\n\n".join(items)
         await telegram.send_message(message_chat_id, text)
-    elif command in {"/pay", "/renew"}:
+    elif command in {"/report_payment", "/confirm_payment"}:
+        if payment_source == "sheet":
+            if admin_telegram_ids:
+                db.execute(
+                    "INSERT INTO support_requests(user_id, status) VALUES (?, 'awaiting_payment')",
+                    (user["id"],),
+                )
+            text = (
+                "Чтобы я нашла ваш платёж, напишите следующим сообщением:\n"
+                "• email, который использовали при оплате;\n"
+                "• дату оплаты;\n"
+                "• способ оплаты: Stripe или PayPal.\n\n"
+                "Скриншот не нужен."
+            )
+        else:
+            text = "Сообщите администратору email, дату и способ оплаты."
+        await telegram.send_message(message_chat_id, text, reply_markup=REPLY_KEYBOARD)
+    elif command in {"/pay", "/renew", "/payment_links"}:
         text = "Оплата и продление будут доступны после подключения платёжного провайдера. Обратитесь к администратору."
         try:
             if payment_source == "sheet":
@@ -222,23 +240,13 @@ async def process_update(
                     returning_member_recurring_payment_url
                     if has_paid_history else new_member_recurring_payment_url
                 )
-                if admin_telegram_ids:
-                    db.execute(
-                        "INSERT INTO support_requests(user_id, status) VALUES (?, 'awaiting_payment')",
-                        (user["id"],),
-                    )
                 text = (
-                    "Оплата отмечается администратором в таблице.\n\n"
-                    f"Сумма к оплате: {price} USD.\n\n"
                     "Выберите способ оплаты:\n"
+                    f"Сумма к оплате: {price} USD.\n\n"
                     f"• Разовая оплата: {one_time_url or 'ссылка будет добавлена администратором'}\n"
                     f"• Подписка с ежемесячным автосписанием (можно отменить в любое время): "
                     f"{recurring_url or 'ссылка будет добавлена администратором'}\n\n"
-                    "Если вы хотите подтвердить оплату, напишите следующим сообщением:\n"
-                    "• email, который использовали при оплате;\n"
-                    "• дату оплаты;\n"
-                    "• способ оплаты: Stripe или PayPal.\n\n"
-                    "Скриншот не нужен."
+                    "После оплаты нажмите «🧾 Сообщить об оплате»."
                 )
             elif stripe_secret_key and stripe_price_id:
                 session = await create_checkout_session(

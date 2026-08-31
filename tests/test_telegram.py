@@ -107,7 +107,7 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
     client = TelegramClient("test-token", transport=transport)
     update = {
         "update_id": 14,
-        "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/pay"},
+        "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/report_payment"},
     }
 
     with db.connect() as connection:
@@ -121,8 +121,8 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
             admin_telegram_ids=(99,),
         )) == "processed"
 
-    assert "отмечается администратором" in transport.calls[0]["text"]
-    assert "хотите подтвердить оплату" in transport.calls[0]["text"]
+    assert "Чтобы я нашла ваш платёж" in transport.calls[0]["text"]
+    assert "email, который использовали при оплате" in transport.calls[0]["text"]
     confirmation = {
         "update_id": 15,
         "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "anna@example.com, 31 августа, Stripe"},
