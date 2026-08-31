@@ -105,6 +105,7 @@ def test_user_can_send_support_request_and_admin_can_reply(tmp_path):
         asyncio.run(process_update(connection, ask, client, admin_telegram_ids=(99,)))
         asyncio.run(process_update(connection, message, client, admin_telegram_ids=(99,)))
         assert transport.calls[1]["chat_id"] == 99
+        assert "@anna" in transport.calls[1]["text"]
         assert "Сообщение отправлено" in transport.calls[2]["text"]
         asyncio.run(process_update(connection, reply, client, admin_telegram_ids=(99,)))
         assert connection.execute("SELECT status FROM support_requests WHERE id = 1").fetchone()[0] == "answered"

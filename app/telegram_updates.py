@@ -107,7 +107,7 @@ async def process_update(
                 text = "Новых обращений нет."
             else:
                 text = "Новые обращения:\n\n" + "\n\n".join(
-                    f"#{item['id']} от {item['telegram_username'] or item['telegram_id']}: {item['message_text']}"
+                    f"#{item['id']} от {_display_user(item['telegram_username'], item['telegram_id'])}: {item['message_text']}"
                     for item in requests
                 )
             await telegram.send_message(message_chat_id, text)
@@ -342,10 +342,16 @@ def _create_support_request(db: sqlite3.Connection, user_id: int, message_text: 
     return int(cursor.lastrowid)
 
 
+def _display_user(username: str | None, telegram_id: int) -> str:
+    if username:
+        return username if username.startswith("@") else f"@{username}"
+    return f"Telegram ID {telegram_id}"
+
+
 async def _notify_admins(telegram: TelegramClient, admin_ids: tuple[int, ...], request_id: int, user: sqlite3.Row, message_text: str) -> None:
     text = (
         f"🆘 Новое обращение #{request_id}\n"
-        f"Пользователь: {user['telegram_username'] or 'без username'}\n"
+        f"Пользователь: {_display_user(user['telegram_username'], user['telegram_id'])}\n"
         f"Telegram ID: {user['telegram_id']}\n\n"
         f"{message_text}\n\n"
         f"Ответ: /reply {request_id} ваш текст"
