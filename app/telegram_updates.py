@@ -308,9 +308,9 @@ async def process_update(
                 text = "Не удалось выдать доступ к сайту. Попробуйте позже."
                 if str(exc) == "site credentials were already delivered":
                     text = (
-                        "Логин и первоначальный пароль уже были отправлены ранее. "
-                        "Проверьте личные сообщения и смените пароль после входа. "
-                        "Если доступ потерян, обратитесь к администратору."
+                        "Логин и первоначальный пароль уже были отправлены ранее.\n"
+                        f"Если доступ потерян, попробуйте его восстановить используя емейл: {user['wordpress_email']} "
+                        "или обратитесь к администратору."
                     )
                 await telegram.send_message(message_chat_id, text)
     elif message_text and not message_text.startswith("/"):

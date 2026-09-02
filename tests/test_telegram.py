@@ -292,6 +292,33 @@ def test_site_access_uses_active_subscription_and_does_not_store_password(tmp_pa
     assert "temporary_expires_at" not in wordpress_transport.payload
 
 
+def test_site_access_repeat_includes_account_email_for_recovery(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'site-access-repeat.db'}")
+    db.init_schema()
+    telegram_transport = TelegramTransport()
+    telegram = TelegramClient("test-token", transport=telegram_transport)
+    wordpress_transport = WordPressTransport()
+    from app.integrations.wordpress import WordPressClient
+    wordpress = WordPressClient("https://example.test", "shared-secret", transport=wordpress_transport)
+    update = {"update_id": 12, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/site-access"}}
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id, wordpress_email, site_credentials_delivered_at) VALUES (?, ?, CURRENT_TIMESTAMP) RETURNING id",
+            (42, "anna@example.com"),
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) VALUES (?, 'stripe', 'sub_1', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        assert asyncio.run(process_update(connection, update, telegram, wordpress=wordpress)) == "processed"
+
+    assert telegram_transport.calls[0]["text"] == (
+        "Логин и первоначальный пароль уже были отправлены ранее.\n"
+        "Если доступ потерян, попробуйте его восстановить используя емейл: anna@example.com "
+        "или обратитесь к администратору."
+    )
+
+
 def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'keys.db'}")
     db.init_schema()
