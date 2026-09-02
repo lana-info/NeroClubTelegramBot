@@ -63,6 +63,7 @@ async def issue_site_credentials(
         await telegram.send_message(
             user["telegram_id"],
             "Доступ к сайту выдан.\n"
+            f"Email: {user['wordpress_email']}\n"
             f"Логин: {result['login']}\n"
             f"Первоначальный пароль: {password}\n\n"
             "Войдите на сайт и сразу замените его на свой личный пароль. "

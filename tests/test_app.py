@@ -157,6 +157,7 @@ def test_site_access_job_delivers_and_completes_sheet_command(tmp_path):
         result = asyncio.run(process_pending_site_access_jobs(connection, telegram, wordpress))
         assert result == {"processed": 1, "failed": 0}
         assert telegram.messages[0][0] == 456
+        assert "Email: anna@example.com" in telegram.messages[0][1]
         assert "Первоначальный пароль:" in telegram.messages[0][1]
         stored = json.dumps(dict(connection.execute("SELECT payload, result FROM sheets_commands").fetchone()))
         assert wordpress.payload["password"] not in stored
