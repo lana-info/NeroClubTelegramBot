@@ -47,6 +47,10 @@ class Settings:
     new_member_recurring_payment_url: str = os.getenv("NEW_MEMBER_RECURRING_PAYMENT_URL", "")
     returning_member_one_time_payment_url: str = os.getenv("RETURNING_MEMBER_ONE_TIME_PAYMENT_URL", "")
     returning_member_recurring_payment_url: str = os.getenv("RETURNING_MEMBER_RECURRING_PAYMENT_URL", "")
+    vibix_images_windows_url: str = os.getenv("VIBIX_IMAGES_WINDOWS_URL", "")
+    vibix_images_macos_url: str = os.getenv("VIBIX_IMAGES_MACOS_URL", "")
+    vibix_video_windows_url: str = os.getenv("VIBIX_VIDEO_WINDOWS_URL", "")
+    vibix_video_macos_url: str = os.getenv("VIBIX_VIDEO_MACOS_URL", "")
 
 
 settings = Settings()

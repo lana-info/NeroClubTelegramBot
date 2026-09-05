@@ -34,6 +34,7 @@ async def process_update(
     new_member_recurring_payment_url: str = "",
     returning_member_one_time_payment_url: str = "",
     returning_member_recurring_payment_url: str = "",
+    app_download_urls: dict[str, dict[str, str]] | None = None,
     stripe_secret_key: str = "",
     stripe_price_id: str = "",
     checkout_success_url: str = "",
@@ -222,7 +223,16 @@ async def process_update(
             items = []
             for item in keys:
                 expires = display_expiry(item["key_expires_at"])
-                items.append(f"{item['app_name']}\nКлюч: {item['key']}\nДействует до: {expires}")
+                item_text = f"{item['app_name']}\nКлюч: {item['key']}\nДействует до: {expires}"
+                downloads = (app_download_urls or {}).get(item["app_name"], {})
+                download_lines = [
+                    f"Скачать {platform}: {url}"
+                    for platform, url in downloads.items()
+                    if url
+                ]
+                if download_lines:
+                    item_text += "\n" + "\n".join(download_lines)
+                items.append(item_text)
             text = "Ваши ключи приложений:\n\n" + "\n\n".join(items)
         await telegram.send_message(message_chat_id, text)
     elif command in {"/report_payment", "/confirm_payment"}:

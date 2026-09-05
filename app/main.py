@@ -258,6 +258,24 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
                 new_member_recurring_payment_url=settings.new_member_recurring_payment_url,
                 returning_member_one_time_payment_url=settings.returning_member_one_time_payment_url,
                 returning_member_recurring_payment_url=settings.returning_member_recurring_payment_url,
+                app_download_urls={
+                    "clipart-generator": {
+                        "Windows": settings.vibix_images_windows_url,
+                        "macOS": settings.vibix_images_macos_url,
+                    },
+                    "trendwatcher-video": {
+                        "Windows": settings.vibix_video_windows_url,
+                        "macOS": settings.vibix_video_macos_url,
+                    },
+                    "Clipart Generator": {
+                        "Windows": settings.vibix_images_windows_url,
+                        "macOS": settings.vibix_images_macos_url,
+                    },
+                    "TrendWatcher Video": {
+                        "Windows": settings.vibix_video_windows_url,
+                        "macOS": settings.vibix_video_macos_url,
+                    },
+                },
                 stripe_secret_key=settings.stripe_secret_key,
                 stripe_price_id=settings.stripe_price_id,
                 checkout_success_url=settings.checkout_success_url,

@@ -344,6 +344,33 @@ def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
     assert "30.09.2999" in telegram_transport.calls[0]["text"]
 
 
+def test_my_keys_includes_configured_download_links(tmp_path):
+    db = Database(f"sqlite:///{tmp_path / 'keys-links.db'}")
+    db.init_schema()
+    telegram_transport = TelegramTransport()
+    telegram = TelegramClient("test-token", transport=telegram_transport)
+    encryption_key = Fernet.generate_key().decode()
+    update = {"update_id": 25, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/my-keys"}}
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id) VALUES (?) RETURNING id", (42,)
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'stripe', 'sub_links', 'active', 'paid', '2999-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        create_app_key(connection, {
+            "key_id": "app-links", "app_name": "Vibix Images", "key": "CG-LINK-KEY",
+            "user_id": user["id"],
+        }, encryption_key)
+        asyncio.run(process_update(
+            connection, update, telegram, app_keys_encryption_key=encryption_key,
+            app_download_urls={"Vibix Images": {"Windows": "https://downloads.test/vibix.exe"}},
+        ))
+    assert "Скачать Windows: https://downloads.test/vibix.exe" in telegram_transport.calls[0]["text"]
+
+
 def test_my_keys_requires_paid_subscription_and_rejects_whitelist(tmp_path):
     db = Database(f"sqlite:///{tmp_path / 'keys-access.db'}")
     db.init_schema()
