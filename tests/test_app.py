@@ -298,12 +298,17 @@ def test_reconciliation_marks_automatic_ban_as_system_ban(tmp_path):
 
     db = database(tmp_path)
     with db.connect() as connection:
-        user = upsert_user(connection, {"telegram_id": 3})
+        user = upsert_user(connection, {"telegram_id": 3, "wordpress_user_id": 903})
         result = asyncio.run(reconcile_members(connection, FakeTelegram(), "-100", dry_run=False))
         stored = connection.execute("SELECT * FROM users WHERE id = ?", (user["id"],)).fetchone()
         assert result["removed"] == 1
         assert stored["telegram_ban_source"] == "system"
         assert stored["telegram_banned"] == 0
+        jobs = connection.execute(
+            "SELECT kind, payload FROM outbox_jobs WHERE kind = 'site.deactivate'"
+        ).fetchall()
+        assert len(jobs) == 1
+        assert json.loads(jobs[0]["payload"])["user_id"] == user["id"]
 
 
 def test_reconciliation_can_check_the_special_channel(tmp_path):
@@ -454,6 +459,46 @@ def test_site_membership_jobs_call_restore_and_deactivate(tmp_path):
         result = asyncio.run(process_pending_site_access_jobs(connection, FakeTelegram(), wordpress))
         assert result == {"processed": 2, "failed": 0}
     assert [item[0]["action"] for item in wordpress.actions] == ["deactivate", "restore"]
+
+
+def test_wordpress_client_uses_mcp_for_targeted_deactivation():
+    from app.integrations.wordpress import WordPressClient
+
+    class MCPTransport(httpx.AsyncBaseTransport):
+        def __init__(self):
+            self.request = None
+
+        async def handle_async_request(self, request):
+            self.request = request
+            body = json.loads((await request.aread()).decode())
+            assert request.url.path == "/wp-json/mcp/mcp-adapter-default-server"
+            assert body["method"] == "tools/call"
+            args = body["params"]["arguments"]
+            assert args["ability_name"] == "mosmcp/update-user-metadata"
+            assert args["parameters"] == {
+                "id": 77,
+                "meta_key": "_nero_club_access_blocked",
+                "meta_value": "1",
+            }
+            return httpx.Response(200, json={"jsonrpc": "2.0", "id": body["id"], "result": {"content": []}})
+
+    transport = MCPTransport()
+    wordpress = WordPressClient(
+        "https://example.test",
+        "legacy-secret",
+        mcp_username="bot-mcp",
+        mcp_application_password="app-password",
+        transport=transport,
+    )
+    result = asyncio.run(wordpress.sync_user({"action": "deactivate", "user_id": 77}, "job-1"))
+
+    assert result == {
+        "user_id": 77,
+        "action": "deactivate",
+        "access_blocked": True,
+        "transport": "mcp",
+    }
+    assert transport.request.headers["authorization"].startswith("Basic ")
 
 
 def test_site_membership_job_keeps_retry_state_on_wordpress_error(tmp_path):

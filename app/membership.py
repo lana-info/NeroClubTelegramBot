@@ -318,6 +318,17 @@ async def reconcile_members(
                             (user["id"],),
                         )
                         await telegram.ban_chat_member(chat_id, user["telegram_id"])
+                        if site_deactivation_enabled and (
+                            user["wordpress_user_id"]
+                            or user["wordpress_login"]
+                            or user["wordpress_email"]
+                        ):
+                            queue_site_access_job(
+                                db,
+                                user["id"],
+                                "deactivate",
+                                f"reconcile-denied-{user['id']}",
+                            )
                         removed += 1
         except Exception:
             failed += 1

@@ -39,6 +39,8 @@ class Settings:
     admin_telegram_ids: tuple[int, ...] = _telegram_ids(os.getenv("ADMIN_TELEGRAM_IDS", ""))
     wordpress_base_url: str = os.getenv("WORDPRESS_BASE_URL", "").rstrip("/")
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")
+    wordpress_mcp_username: str = os.getenv("WORDPRESS_MCP_USERNAME", "")
+    wordpress_mcp_application_password: str = os.getenv("WORDPRESS_MCP_APPLICATION_PASSWORD", "")
     app_keys_encryption_key: str = os.getenv("APP_KEYS_ENCRYPTION_KEY", "")
     payment_url: str = os.getenv("PAYMENT_URL", "")
     new_member_price_usd: str = os.getenv("NEW_MEMBER_PRICE_USD", "20")

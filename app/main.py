@@ -238,7 +238,12 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
         telegram = TelegramClient(settings.telegram_bot_token)
         wordpress = None
         if settings.wordpress_base_url and settings.wordpress_shared_secret:
-            wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
+            wordpress = WordPressClient(
+                settings.wordpress_base_url,
+                settings.wordpress_shared_secret,
+                mcp_username=settings.wordpress_mcp_username,
+                mcp_application_password=settings.wordpress_mcp_application_password,
+            )
         with db.connect() as connection:
             telegram_chat_ids = tuple(
                 chat_id
@@ -410,7 +415,12 @@ async def process_site_access_jobs(_: str = Depends(require_admin)) -> dict[str,
     if not settings.telegram_bot_token or not settings.wordpress_base_url or not settings.wordpress_shared_secret:
         raise HTTPException(status_code=503, detail="Telegram and WordPress integrations are not configured")
     telegram = TelegramClient(settings.telegram_bot_token)
-    wordpress = WordPressClient(settings.wordpress_base_url, settings.wordpress_shared_secret)
+    wordpress = WordPressClient(
+        settings.wordpress_base_url,
+        settings.wordpress_shared_secret,
+        mcp_username=settings.wordpress_mcp_username,
+        mcp_application_password=settings.wordpress_mcp_application_password,
+    )
     with db.connect() as connection:
         flags = get_flags(connection)
         return await process_pending_site_access_jobs(
