@@ -77,6 +77,19 @@ class Database:
                     UNIQUE(provider, external_event_id)
                 );
 
+                CREATE TABLE IF NOT EXISTS sheet_payment_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    payment_id TEXT NOT NULL UNIQUE,
+                    user_id INTEGER REFERENCES users(id),
+                    telegram_id INTEGER,
+                    paid_at TEXT,
+                    plan TEXT NOT NULL DEFAULT 'monthly',
+                    status TEXT NOT NULL,
+                    applied_until TEXT,
+                    error TEXT,
+                    processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS outbox_jobs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     kind TEXT NOT NULL,

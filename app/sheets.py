@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from calendar import monthrange
 from datetime import datetime, timezone
 import json
 import sqlite3
@@ -33,6 +34,10 @@ SETTINGS_DESCRIPTIONS = {
     "reminders": "Отправлять напоминания о подписке",
 }
 
+SHEET_PAYMENT_HEADERS = [
+    "payment_id", "telegram_id", "paid_at", "plan", "status", "applied_until", "processed_at", "error",
+]
+
 
 def _sheet_datetime(value: str | None) -> str | None:
     if not value:
@@ -41,6 +46,161 @@ def _sheet_datetime(value: str | None) -> str | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.isoformat()
+
+
+def _sheet_payment_date(value: Any) -> datetime:
+    if not isinstance(value, str) or not value:
+        raise ValueError("paid_at is required and must be YYYY-MM-DD")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError("paid_at is required and must be YYYY-MM-DD") from exc
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    return datetime(parsed.year, parsed.month, parsed.day, tzinfo=timezone.utc)
+
+
+def _add_calendar_month(value: datetime) -> datetime:
+    month = value.month + 1
+    year = value.year
+    if month == 13:
+        year += 1
+        month = 1
+    return value.replace(year=year, month=month, day=min(value.day, monthrange(year, month)[1]))
+
+
+def _payment_result(row: sqlite3.Row, *, status: str | None = None) -> dict[str, Any]:
+    return {
+        "payment_id": row["payment_id"],
+        "telegram_id": row["telegram_id"],
+        "paid_at": (row["paid_at"] or "")[:10],
+        "plan": row["plan"],
+        "status": status or row["status"],
+        "applied_until": (row["applied_until"] or "")[:10],
+        "error": row["error"] or "",
+    }
+
+
+def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for payload in rows:
+        payment_id = payload.get("payment_id")
+        if not isinstance(payment_id, str) or not payment_id:
+            raise ValueError("payment_id is required")
+        existing = db.execute(
+            "SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)
+        ).fetchone()
+        if existing:
+            results.append(_payment_result(existing, status="duplicate"))
+            continue
+
+        telegram_id = payload.get("telegram_id")
+        if isinstance(telegram_id, str) and telegram_id.isdigit():
+            telegram_id = int(telegram_id)
+        paid_at = payload.get("paid_at")
+        error = ""
+        user = None
+        paid_at_value = None
+        if not isinstance(telegram_id, int):
+            error = "telegram_id is required and must be numeric"
+        else:
+            try:
+                paid_at_value = _sheet_payment_date(paid_at)
+            except ValueError as exc:
+                error = str(exc)
+            if not error:
+                user = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
+                if not user:
+                    error = "user not found for telegram_id"
+
+        event_payload = json.dumps({
+            "payment_id": payment_id, "telegram_id": telegram_id, "paid_at": paid_at, "plan": "monthly",
+        }, ensure_ascii=False)
+        inserted_event = db.execute(
+            "INSERT OR IGNORE INTO inbox_events(provider, external_event_id, event_type, payload, processed_at) "
+            "VALUES ('sheet', ?, 'manual_payment', ?, CURRENT_TIMESTAMP)",
+            (payment_id, event_payload),
+        )
+        if not inserted_event.rowcount:
+            completed = db.execute(
+                "SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)
+            ).fetchone()
+            if completed:
+                results.append(_payment_result(completed, status="duplicate"))
+                continue
+            raise ValueError("payment is already being processed; retry")
+
+        applied_until = None
+        status = "error" if error else "processed"
+        if user and paid_at_value:
+            paid_dates = [
+                parse for (raw,) in db.execute(
+                    "SELECT provider_paid_until FROM subscriptions WHERE user_id = ? AND payment_status = 'paid'",
+                    (user["id"],),
+                ).fetchall()
+                if raw and (parse := _sheet_datetime(raw))
+            ]
+            current_until = max((datetime.fromisoformat(value) for value in paid_dates), default=paid_at_value)
+            applied_until = _add_calendar_month(max(current_until, paid_at_value)).isoformat()
+            subscription_id = f"manual-{user['telegram_id']}"
+            db.execute(
+                """INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until)
+                   VALUES (?, 'sheet', ?, 'active', 'paid', ?)
+                   ON CONFLICT(provider, provider_subscription_id) DO UPDATE SET
+                   user_id = excluded.user_id, provider_paid_until = excluded.provider_paid_until,
+                   billing_status = 'active', payment_status = 'paid', updated_at = CURRENT_TIMESTAMP""",
+                (user["id"], subscription_id, applied_until),
+            )
+            db.execute(
+                "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+                ("telegram.invite", f"sheet-payment-{payment_id}", json.dumps({
+                    "user_id": user["id"], "source": "sheet", "payment_id": payment_id,
+                }, ensure_ascii=False)),
+            )
+
+        db.execute(
+            """INSERT INTO sheet_payment_results
+               (payment_id, user_id, telegram_id, paid_at, plan, status, applied_until, error)
+               VALUES (?, ?, ?, ?, 'monthly', ?, ?, ?)""",
+            (payment_id, user["id"] if user else None, telegram_id, paid_at_value.isoformat() if paid_at_value else paid_at,
+             status, applied_until, error),
+        )
+        stored = db.execute("SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)).fetchone()
+        results.append(_payment_result(stored))
+    return results
+
+
+def rows_for_payments_sheet(db: sqlite3.Connection) -> list[list[Any]]:
+    rows: list[list[Any]] = [SHEET_PAYMENT_HEADERS]
+    for payment in db.execute("SELECT * FROM sheet_payment_results ORDER BY id").fetchall():
+        rows.append([
+            payment["payment_id"], payment["telegram_id"] or "", (payment["paid_at"] or "")[:10], payment["plan"],
+            payment["status"], (payment["applied_until"] or "")[:10], payment["processed_at"], payment["error"] or "",
+        ])
+    return rows
+
+
+def sync_whitelists(db: sqlite3.Connection, rows: list[dict[str, Any]], actor: str) -> int:
+    updated = 0
+    for payload in rows:
+        user_id = payload.get("user_id")
+        if isinstance(user_id, str) and user_id.isdigit():
+            user_id = int(user_id)
+        if not isinstance(user_id, int):
+            raise ValueError("user_id is required and must be numeric")
+        user = db.execute("SELECT whitelist FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not user:
+            raise LookupError("user not found")
+        enabled = payload.get("whitelist") in {True, "yes", "true", "TRUE", "Yes"}
+        if bool(user["whitelist"]) == enabled:
+            continue
+        db.execute("UPDATE users SET whitelist = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (int(enabled), user_id))
+        db.execute(
+            "INSERT INTO audit_log(actor, action, user_id, details) VALUES (?, 'sheets.whitelist', ?, ?)",
+            (actor, user_id, json.dumps({"whitelist": enabled}, ensure_ascii=False)),
+        )
+        updated += 1
+    return updated
 
 
 def _latest_command(db: sqlite3.Connection, user_id: int) -> sqlite3.Row | None:

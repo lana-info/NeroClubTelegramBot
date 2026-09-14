@@ -21,7 +21,10 @@ from app.membership import (
 from app.stripe_checkout import create_checkout_session
 from app.reminders import send_subscription_reminders
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows, sync_license_rows
-from app.sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
+from app.sheets import (
+    dashboard_rows, import_users, process_sheet_payments, rows_for_payments_sheet,
+    rows_for_site_access_sheet, rows_for_users_sheet, sync_whitelists,
+)
 from cryptography.fernet import Fernet
 
 
@@ -233,6 +236,73 @@ def test_sheet_snapshot_import_is_idempotent_and_exposes_operational_rows(tmp_pa
         assert user_rows[1][5] == "active"
         assert site_rows[1][7] == "active"
         assert ["total_users", 1] in metrics
+
+
+def test_sheet_payment_extends_by_calendar_month_and_is_idempotent(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 42})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'sheet', 'manual-42', 'active', 'paid', '2026-01-31T00:00:00+00:00')",
+            (user["id"],),
+        )
+        first = process_sheet_payments(connection, [
+            {"payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15"},
+        ])
+        second = process_sheet_payments(connection, [
+            {"payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15"},
+        ])
+        rows = rows_for_payments_sheet(connection)
+        jobs = connection.execute("SELECT COUNT(*) FROM outbox_jobs WHERE kind = 'telegram.invite'").fetchone()[0]
+
+    assert first == [{
+        "payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15",
+        "plan": "monthly", "status": "processed", "applied_until": "2026-02-28",
+        "error": "",
+    }]
+    assert second[0]["status"] == "duplicate"
+    assert second[0]["applied_until"] == "2026-02-28"
+    assert rows[0] == [
+        "payment_id", "telegram_id", "paid_at", "plan", "status", "applied_until", "processed_at", "error",
+    ]
+    assert rows[1][0:6] == ["sheet-payment-1", 42, "2026-01-15", "monthly", "processed", "2026-02-28"]
+    assert jobs == 1
+
+
+def test_sheet_payment_for_unknown_user_is_recorded_as_error_without_access_change(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        result = process_sheet_payments(connection, [
+            {"payment_id": "sheet-payment-missing", "telegram_id": 999, "paid_at": "2026-01-31"},
+        ])
+        subscriptions = connection.execute("SELECT COUNT(*) FROM subscriptions").fetchone()[0]
+
+    assert result[0]["status"] == "error"
+    assert result[0]["applied_until"] == ""
+    assert "user not found" in result[0]["error"]
+    assert subscriptions == 0
+
+
+def test_sheet_whitelist_sync_does_not_overwrite_paid_until(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 43})
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status, provider_paid_until) "
+            "VALUES (?, 'sheet', 'manual-43', 'active', 'paid', '2026-05-31T00:00:00+00:00')",
+            (user["id"],),
+        )
+        assert sync_whitelists(connection, [{"user_id": user["id"], "whitelist": "yes"}], "test") == 1
+        stored = connection.execute(
+            "SELECT whitelist FROM users WHERE id = ?", (user["id"],)
+        ).fetchone()
+        until = connection.execute(
+            "SELECT provider_paid_until FROM subscriptions WHERE user_id = ?", (user["id"],)
+        ).fetchone()[0]
+
+    assert stored["whitelist"] == 1
+    assert until == "2026-05-31T00:00:00+00:00"
 
 
 def test_site_access_sheet_matches_delivery_by_exact_user_id(tmp_path):

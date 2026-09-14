@@ -11,9 +11,13 @@
 const SHEETS_BACKEND_URL_PROPERTY = 'BACKEND_URL';
 const SHEETS_ADMIN_TOKEN_PROPERTY = 'ADMIN_API_TOKEN';
 const USERS_SHEET = 'Пользователи';
+const PAYMENTS_SHEET = 'Платежи';
 const SITE_SHEET = 'Доступ к сайту';
 const DASHBOARD_SHEET = 'Dashboard';
 const SETTINGS_SHEET = 'Настройки';
+const PAYMENT_HEADERS = [
+  'payment_id', 'telegram_id', 'paid_at', 'plan', 'status', 'applied_until', 'processed_at', 'error'
+];
 
 function installSheetsSyncTrigger() {
   ScriptApp.getProjectTriggers().forEach(function(trigger) {
@@ -83,6 +87,69 @@ function syncSheetCommands_() {
   syncCommandsFromSheet_(SITE_SHEET);
 }
 
+function ensurePaymentsSheet_() {
+  const spreadsheet = SpreadsheetApp.getActive();
+  let sheet = spreadsheet.getSheetByName(PAYMENTS_SHEET);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(PAYMENTS_SHEET);
+    sheet.getRange(1, 1, 1, PAYMENT_HEADERS.length).setValues([PAYMENT_HEADERS]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, PAYMENT_HEADERS.length).setFontWeight('bold');
+    sheet.autoResizeColumns(1, PAYMENT_HEADERS.length);
+    return sheet;
+  }
+  const current = sheet.getRange(1, 1, 1, PAYMENT_HEADERS.length).getDisplayValues()[0];
+  if (current.join('|') !== PAYMENT_HEADERS.join('|')) {
+    throw new Error('Rename the existing payment history tab to "Платежи (архив)" before enabling payment sync');
+  }
+  return sheet;
+}
+
+function syncPayments_() {
+  const sheet = ensurePaymentsSheet_();
+  const values = sheet.getDataRange().getValues();
+  const headers = values[0].map(function(value) { return String(value); });
+  const index = headerIndex_(headers);
+  const payments = [];
+  for (let row = 1; row < values.length; row++) {
+    const value = values[row];
+    const telegramId = value[index.telegram_id];
+    const paidAt = sheetDate_(value[index.paid_at]);
+    if (!telegramId && !paidAt) continue;
+    let paymentId = value[index.payment_id];
+    if (!paymentId) {
+      paymentId = Utilities.getUuid();
+      sheet.getRange(row + 1, index.payment_id + 1).setValue(paymentId);
+    }
+    payments.push({payment_id: paymentId, telegram_id: telegramId, paid_at: paidAt});
+  }
+  if (payments.length) backendRequest_('/internal/sheets/payments', 'post', {payments: payments});
+}
+
+function sheetDate_(value) {
+  if (value instanceof Date && !isNaN(value.getTime())) {
+    return Utilities.formatDate(value, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  }
+  return String(value || '').trim();
+}
+
+function syncWhitelists_() {
+  const sheet = SpreadsheetApp.getActive().getSheetByName(USERS_SHEET);
+  if (!sheet) throw new Error('Sheet not found: ' + USERS_SHEET);
+  const values = sheet.getDataRange().getDisplayValues();
+  if (values.length < 2) return;
+  const index = headerIndex_(values[0]);
+  ['user_id', 'whitelist'].forEach(function(header) {
+    if (index[header] === undefined) throw new Error('Missing header in ' + USERS_SHEET + ': ' + header);
+  });
+  const users = [];
+  for (let row = 1; row < values.length; row++) {
+    const value = values[row];
+    if (value[index.user_id]) users.push({user_id: Number(value[index.user_id]), whitelist: value[index.whitelist]});
+  }
+  if (users.length) backendRequest_('/internal/sheets/whitelist', 'post', {users: users});
+}
+
 function syncSettings_() {
   const sheet = SpreadsheetApp.getActive().getSheetByName(SETTINGS_SHEET);
   if (!sheet) return;
@@ -130,7 +197,7 @@ function syncCommandsFromSheet_(sheetName) {
 
 function writeBackendRows_(sheetName, endpoint) {
   const body = backendRequest_(endpoint, 'get');
-  if (!body.count) throw new Error('Backend returned no rows for ' + sheetName + '; import snapshot first');
+  if (!body.headers || !body.rows) throw new Error('Backend returned invalid rows for ' + sheetName);
   const sheet = SpreadsheetApp.getActive().getSheetByName(sheetName);
   if (!sheet) throw new Error('Sheet not found: ' + sheetName);
   const headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getDisplayValues()[0];
@@ -144,11 +211,14 @@ function writeBackendRows_(sheetName, endpoint) {
 
 function syncAllSheets() {
   ensureLicensesSheet();
-  importCurrentSnapshot();
+  ensurePaymentsSheet_();
+  syncPayments_();
+  syncWhitelists_();
   syncSheetCommands_();
   syncLicenses();
   syncSettings_();
   writeBackendRows_(USERS_SHEET, '/internal/sheets/users');
+  writeBackendRows_(PAYMENTS_SHEET, '/internal/sheets/payments');
   writeBackendRows_(SITE_SHEET, '/internal/sheets/site-access');
   writeBackendRows_(DASHBOARD_SHEET, '/internal/sheets/dashboard');
   if (SpreadsheetApp.getActive().getSheetByName(SETTINGS_SHEET)) {

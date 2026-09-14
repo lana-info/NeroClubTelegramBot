@@ -29,7 +29,10 @@ from .membership import (
 )
 from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
-from .sheets import dashboard_rows, import_users, rows_for_site_access_sheet, rows_for_users_sheet
+from .sheets import (
+    dashboard_rows, import_users, process_sheet_payments, rows_for_payments_sheet,
+    rows_for_site_access_sheet, rows_for_users_sheet, sync_whitelists,
+)
 from .sheets import rows_for_settings_sheet
 from .feature_flags import get_flags, sync_flags
 
@@ -82,6 +85,39 @@ def sheets_users(_: str = Depends(require_admin)) -> dict[str, Any]:
     with db.connect() as connection:
         rows = rows_for_users_sheet(connection)
     return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.post("/internal/sheets/payments")
+def import_sheet_payments(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[str, Any]:
+    rows = payload.get("payments")
+    if not isinstance(rows, list) or len(rows) > 500:
+        raise HTTPException(status_code=422, detail="payments must be a list with at most 500 items")
+    try:
+        with db.connect() as connection:
+            return {"payments": process_sheet_payments(connection, rows)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/internal/sheets/payments")
+def sheets_payments(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = rows_for_payments_sheet(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.post("/internal/sheets/whitelist")
+def update_sheet_whitelists(payload: dict[str, Any], actor: str = Depends(require_admin)) -> dict[str, int]:
+    rows = payload.get("users")
+    if not isinstance(rows, list) or len(rows) > 1000:
+        raise HTTPException(status_code=422, detail="users must be a list with at most 1000 items")
+    try:
+        with db.connect() as connection:
+            return {"updated": sync_whitelists(connection, rows, actor)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 @app.get("/internal/sheets/site-access")
