@@ -93,6 +93,16 @@ class Database:
                     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS sheet_payment_corrections (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    payment_id TEXT NOT NULL REFERENCES sheet_payment_results(payment_id),
+                    user_id INTEGER REFERENCES users(id),
+                    before_json TEXT NOT NULL,
+                    after_json TEXT NOT NULL,
+                    note TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS outbox_jobs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     kind TEXT NOT NULL,

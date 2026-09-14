@@ -30,7 +30,7 @@ from .membership import (
 from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
 from .sheets import (
-    dashboard_rows, import_users, process_sheet_payments, rows_for_payments_sheet,
+    correct_sheet_payment, dashboard_rows, import_users, process_sheet_payments, rows_for_payment_corrections_sheet, rows_for_payments_sheet,
     rows_for_site_access_sheet, rows_for_users_sheet, sync_whitelists,
 )
 from .sheets import rows_for_settings_sheet
@@ -103,6 +103,24 @@ def import_sheet_payments(payload: dict[str, Any], _: str = Depends(require_admi
 def sheets_payments(_: str = Depends(require_admin)) -> dict[str, Any]:
     with db.connect() as connection:
         rows = rows_for_payments_sheet(connection)
+    return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
+
+
+@app.post("/internal/sheets/payment-corrections")
+def correct_payment(payload: dict[str, Any], _: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        with db.connect() as connection:
+            return {"payment": correct_sheet_payment(connection, payload)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.get("/internal/sheets/payment-corrections")
+def sheets_payment_corrections(_: str = Depends(require_admin)) -> dict[str, Any]:
+    with db.connect() as connection:
+        rows = rows_for_payment_corrections_sheet(connection)
     return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
 
 

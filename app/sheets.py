@@ -39,6 +39,10 @@ SHEET_PAYMENT_HEADERS = [
     "payment_provider", "amount_usd", "provider_payment_id",
 ]
 
+SHEET_PAYMENT_CORRECTION_HEADERS = [
+    "correction_id", "payment_id", "telegram_id", "before", "after", "note", "corrected_at",
+]
+
 
 def _sheet_datetime(value: str | None) -> str | None:
     if not value:
@@ -205,6 +209,109 @@ def rows_for_payments_sheet(db: sqlite3.Connection) -> list[list[Any]]:
             payment["payment_id"], payment["telegram_id"] or "", (payment["paid_at"] or "")[:10], payment["plan"],
             payment["status"], (payment["applied_until"] or "")[:10], payment["processed_at"], payment["error"] or "",
             payment["payment_provider"] or "", payment["amount_usd"] or "", payment["provider_payment_id"] or "",
+        ])
+    return rows
+
+
+def correct_sheet_payment(db: sqlite3.Connection, payload: dict[str, Any]) -> dict[str, Any]:
+    payment_id = payload.get("payment_id")
+    if not isinstance(payment_id, str) or not payment_id:
+        raise ValueError("payment_id is required")
+    note = str(payload.get("note") or "").strip()
+    if not note:
+        raise ValueError("note is required")
+    payment = db.execute(
+        "SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)
+    ).fetchone()
+    if not payment:
+        raise LookupError("payment not found")
+    if payment["status"] != "processed":
+        raise ValueError("only processed payments can be corrected")
+    supplied_telegram_id = payload.get("telegram_id")
+    if str(supplied_telegram_id or "") != str(payment["telegram_id"] or ""):
+        raise ValueError("payment does not belong to this Telegram ID")
+
+    paid_at = payload.get("paid_at") or (payment["paid_at"] or "")[:10]
+    paid_at_value = _sheet_payment_date(paid_at)
+    payment_provider = str(payload.get("payment_provider") or payment["payment_provider"] or "").strip().lower()
+    if payment_provider not in {"stripe", "paypal"}:
+        raise ValueError("payment_provider must be stripe or paypal")
+    raw_amount = payload.get("amount_usd", payment["amount_usd"])
+    try:
+        amount_usd = int(raw_amount)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("amount_usd must be 10 or 20") from exc
+    if amount_usd not in {10, 20}:
+        raise ValueError("amount_usd must be 10 or 20")
+    provider_payment_id = str(payload.get("provider_payment_id") or payment["provider_payment_id"] or "").strip()
+    if provider_payment_id:
+        duplicate = db.execute(
+            "SELECT payment_id FROM sheet_payment_results "
+            "WHERE payment_provider = ? AND provider_payment_id = ? AND payment_id != ?",
+            (payment_provider, provider_payment_id, payment_id),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("this Stripe/PayPal payment ID already belongs to another payment")
+
+    previous_until = [
+        datetime.fromisoformat(raw)
+        for raw, in db.execute(
+            "SELECT applied_until FROM sheet_payment_results "
+            "WHERE user_id = ? AND status = 'processed' AND payment_id != ? AND paid_at <= ?",
+            (payment["user_id"], payment_id, paid_at_value.isoformat()),
+        ).fetchall()
+        if raw
+    ]
+    applied_until = _add_calendar_month(max(previous_until + [paid_at_value])).isoformat()
+    before = _payment_result(payment)
+    db.execute(
+        """UPDATE sheet_payment_results
+           SET paid_at = ?, payment_provider = ?, amount_usd = ?, provider_payment_id = ?, applied_until = ?
+           WHERE payment_id = ?""",
+        (paid_at_value.isoformat(), payment_provider, amount_usd, provider_payment_id, applied_until, payment_id),
+    )
+    corrected = db.execute(
+        "SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)
+    ).fetchone()
+    after = _payment_result(corrected)
+    cursor = db.execute(
+        """INSERT INTO sheet_payment_corrections(payment_id, user_id, before_json, after_json, note)
+           VALUES (?, ?, ?, ?, ?)""",
+        (payment_id, payment["user_id"], json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False), note),
+    )
+    if payment["user_id"]:
+        latest_until = max(
+            datetime.fromisoformat(raw)
+            for raw, in db.execute(
+                "SELECT applied_until FROM sheet_payment_results WHERE user_id = ? AND status = 'processed'",
+                (payment["user_id"],),
+            ).fetchall()
+            if raw
+        )
+        db.execute(
+            """UPDATE subscriptions SET provider_paid_until = ?, updated_at = CURRENT_TIMESTAMP
+               WHERE user_id = ? AND provider = 'sheet' AND provider_subscription_id = ?""",
+            (latest_until.isoformat(), payment["user_id"], f"manual-{payment['telegram_id']}"),
+        )
+        db.execute(
+            "INSERT OR IGNORE INTO outbox_jobs(kind, aggregate_key, payload) VALUES (?, ?, ?)",
+            ("telegram.invite", f"sheet-payment-correction-{cursor.lastrowid}", json.dumps({
+                "user_id": payment["user_id"], "source": "sheet_payment_correction", "payment_id": payment_id,
+            }, ensure_ascii=False)),
+        )
+    return after
+
+
+def rows_for_payment_corrections_sheet(db: sqlite3.Connection) -> list[list[Any]]:
+    rows: list[list[Any]] = [SHEET_PAYMENT_CORRECTION_HEADERS]
+    for correction in db.execute(
+        """SELECT corrections.*, results.telegram_id FROM sheet_payment_corrections corrections
+           LEFT JOIN sheet_payment_results results ON results.payment_id = corrections.payment_id
+           ORDER BY corrections.id"""
+    ).fetchall():
+        rows.append([
+            correction["id"], correction["payment_id"], correction["telegram_id"] or "",
+            correction["before_json"], correction["after_json"], correction["note"], correction["created_at"],
         ])
     return rows
 

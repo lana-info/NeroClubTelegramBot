@@ -23,7 +23,7 @@ from app.stripe_checkout import create_checkout_session
 from app.reminders import send_subscription_reminders
 from app.keys import create_app_key, keys_for_user, sync_app_key_rows, sync_license_rows
 from app.sheets import (
-    dashboard_rows, import_users, process_sheet_payments, rows_for_payments_sheet,
+    correct_sheet_payment, dashboard_rows, import_users, process_sheet_payments, rows_for_payment_corrections_sheet, rows_for_payments_sheet,
     rows_for_site_access_sheet, rows_for_users_sheet, sync_whitelists,
 )
 from cryptography.fernet import Fernet
@@ -313,6 +313,32 @@ def test_sheet_payment_for_unknown_user_is_recorded_as_error_without_access_chan
     assert result[0]["applied_until"] == ""
     assert "user not found" in result[0]["error"]
     assert subscriptions == 0
+
+
+def test_sheet_payment_correction_updates_expiry_and_records_audit_row(tmp_path):
+    db = database(tmp_path)
+    with db.connect() as connection:
+        user = upsert_user(connection, {"telegram_id": 77})
+        created = process_sheet_payments(connection, [{
+            "payment_id": "payment-to-correct", "telegram_id": 77, "paid_at": "2026-07-23",
+            "payment_provider": "paypal", "amount_usd": 10, "provider_payment_id": "paypal-77",
+        }])[0]
+        corrected = correct_sheet_payment(connection, {
+            "payment_id": "payment-to-correct", "telegram_id": 77, "paid_at": "2026-08-23",
+            "payment_provider": "paypal", "amount_usd": 10, "provider_payment_id": "paypal-77",
+            "note": "Источник: PayPal. Исправлена дата оплаты.",
+        })
+        subscription = connection.execute(
+            "SELECT provider_paid_until FROM subscriptions WHERE user_id = ? AND provider = 'sheet'", (user["id"],)
+        ).fetchone()[0]
+        corrections = rows_for_payment_corrections_sheet(connection)
+
+    assert created["applied_until"] == "2026-08-23"
+    assert corrected["paid_at"] == "2026-08-23"
+    assert corrected["applied_until"] == "2026-09-23"
+    assert subscription == "2026-09-23T00:00:00+00:00"
+    assert corrections[1][1:3] == ["payment-to-correct", 77]
+    assert "Источник: PayPal" in corrections[1][5]
 
 
 def test_sheet_whitelist_sync_does_not_overwrite_paid_until(tmp_path):

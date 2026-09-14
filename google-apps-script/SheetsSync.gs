@@ -12,6 +12,7 @@ const SHEETS_BACKEND_URL_PROPERTY = 'BACKEND_URL';
 const SHEETS_ADMIN_TOKEN_PROPERTY = 'ADMIN_API_TOKEN';
 const USERS_SHEET = 'Пользователи';
 const PAYMENTS_SHEET = 'Платежи';
+const PAYMENT_CORRECTIONS_SHEET = 'Исправления оплат';
 const SITE_SHEET = 'Доступ к сайту';
 const DASHBOARD_SHEET = 'Dashboard';
 const SETTINGS_SHEET = 'Настройки';
@@ -21,6 +22,9 @@ const PAYMENT_HEADERS = [
 ];
 const LEGACY_PAYMENT_HEADERS = [
   'payment_id', 'telegram_id', 'paid_at', 'plan', 'status', 'applied_until', 'processed_at', 'error'
+];
+const PAYMENT_CORRECTION_HEADERS = [
+  'correction_id', 'payment_id', 'telegram_id', 'before', 'after', 'note', 'corrected_at'
 ];
 
 function installSheetsSyncTrigger() {
@@ -39,6 +43,7 @@ function onOpen() {
 
 function showNeroClubSidebar() {
   ensurePaymentsSheet_();
+  ensurePaymentCorrectionsSheet_();
   SpreadsheetApp.getUi().showSidebar(
     HtmlService.createHtmlOutput(NERO_CLUB_PANEL_HTML).setTitle('Nero Club')
   );
@@ -130,6 +135,19 @@ function ensurePaymentsSheet_() {
   return sheet;
 }
 
+function ensurePaymentCorrectionsSheet_() {
+  const spreadsheet = SpreadsheetApp.getActive();
+  let sheet = spreadsheet.getSheetByName(PAYMENT_CORRECTIONS_SHEET);
+  if (!sheet) {
+    sheet = spreadsheet.insertSheet(PAYMENT_CORRECTIONS_SHEET);
+    sheet.getRange(1, 1, 1, PAYMENT_CORRECTION_HEADERS.length).setValues([PAYMENT_CORRECTION_HEADERS]);
+    sheet.setFrozenRows(1);
+    sheet.getRange(1, 1, 1, PAYMENT_CORRECTION_HEADERS.length).setFontWeight('bold');
+    sheet.autoResizeColumns(1, PAYMENT_CORRECTION_HEADERS.length);
+  }
+  return sheet;
+}
+
 function syncPayments_() {
   const sheet = ensurePaymentsSheet_();
   const values = sheet.getDataRange().getValues();
@@ -175,13 +193,27 @@ function panelPaymentDate_(value) {
 }
 
 function refreshPanelViews_() {
+  ensurePaymentCorrectionsSheet_();
   writeBackendRows_(USERS_SHEET, '/internal/sheets/users');
   writeBackendRows_(PAYMENTS_SHEET, '/internal/sheets/payments');
   writeBackendRows_(SITE_SHEET, '/internal/sheets/site-access');
   writeBackendRows_(DASHBOARD_SHEET, '/internal/sheets/dashboard');
+  writeBackendRows_(PAYMENT_CORRECTIONS_SHEET, '/internal/sheets/payment-corrections');
   if (SpreadsheetApp.getActive().getSheetByName(SETTINGS_SHEET)) {
     writeBackendRows_(SETTINGS_SHEET, '/internal/sheets/settings');
   }
+}
+
+function lookupPanelUser(form) {
+  const telegramId = panelTelegramId_(form.telegram_id);
+  const users = backendRequest_('/internal/sheets/users', 'get');
+  const index = headerIndex_(users.headers || []);
+  const row = (users.rows || []).find(function(item) { return String(item[index.telegram_id]) === telegramId; });
+  if (!row) return {ok: false, message: 'Пользователь с таким Telegram ID не найден'};
+  const name = row[index.username] || 'Имя не указано';
+  const email = row[index.wordpress_email] || 'e-mail не указан';
+  const until = String(row[index.provider_paid_until] || '').slice(0, 10) || 'нет активной даты';
+  return {ok: true, message: name + ' · ' + email + ' · доступ до ' + until};
 }
 
 function submitPanelPayment(form) {
@@ -201,6 +233,16 @@ function submitPanelPayment(form) {
     return {ok: false, message: result.error || 'Платёж не обработан. Проверьте Telegram ID.'};
   }
   return {ok: true, message: 'Готово. Доступ продлён до ' + result.applied_until + '.'};
+}
+
+function submitPanelPaymentCorrection(form) {
+  const response = backendRequest_('/internal/sheets/payment-corrections', 'post', {
+    payment_id: String(form.payment_id || '').trim(), telegram_id: panelTelegramId_(form.telegram_id), paid_at: panelPaymentDate_(form.paid_at),
+    payment_provider: String(form.payment_provider || '').toLowerCase(), amount_usd: Number(form.amount_usd),
+    provider_payment_id: String(form.provider_payment_id || '').trim(), note: String(form.note || '').trim()
+  });
+  refreshPanelViews_();
+  return {ok: true, message: 'Исправлено. Новый срок: ' + response.payment.applied_until + '.'};
 }
 
 function submitPanelWhitelist(form) {
@@ -299,6 +341,7 @@ function writeBackendRows_(sheetName, endpoint) {
 function syncAllSheets() {
   ensureLicensesSheet();
   ensurePaymentsSheet_();
+  ensurePaymentCorrectionsSheet_();
   syncPayments_();
   syncWhitelists_();
   syncSheetCommands_();
@@ -308,6 +351,7 @@ function syncAllSheets() {
   writeBackendRows_(PAYMENTS_SHEET, '/internal/sheets/payments');
   writeBackendRows_(SITE_SHEET, '/internal/sheets/site-access');
   writeBackendRows_(DASHBOARD_SHEET, '/internal/sheets/dashboard');
+  writeBackendRows_(PAYMENT_CORRECTIONS_SHEET, '/internal/sheets/payment-corrections');
   if (SpreadsheetApp.getActive().getSheetByName(SETTINGS_SHEET)) {
     writeBackendRows_(SETTINGS_SHEET, '/internal/sheets/settings');
   }
@@ -325,12 +369,14 @@ button.secondary { background: #5f6368; }
 .message { display: none; margin-top: 12px; padding: 10px; border-radius: 5px; line-height: 1.35; }
 .ok { display: block; background: #e6f4ea; color: #137333; }
 .error { display: block; background: #fce8e6; color: #c5221f; }
+.member { margin: 8px 0; color: #137333; line-height: 1.35; }
 </style></head><body>
 <h2>Nero Club</h2>
 <form id="payment-form">
   <h3>Добавить платёж</h3>
   <label for="payment-id">Telegram ID</label>
   <input id="payment-id" required inputmode="numeric" autocomplete="off">
+  <div id="payment-member" class="member"></div>
   <label for="paid-at">Дата оплаты</label>
   <input id="paid-at" type="date" required>
   <label for="payment-provider">Способ оплаты</label>
@@ -342,6 +388,26 @@ button.secondary { background: #5f6368; }
   <button id="payment-button" type="submit">Продлить подписку</button>
   <div id="payment-message" class="message"></div>
 </form>
+<form id="correction-form">
+  <h3>Исправить проведённый платёж</h3>
+  <label for="correction-id">Telegram ID</label>
+  <input id="correction-id" required inputmode="numeric" autocomplete="off">
+  <div id="correction-member" class="member"></div>
+  <label for="correction-payment-id">ID записи из вкладки «Платежи»</label>
+  <input id="correction-payment-id" required autocomplete="off">
+  <label for="correction-date">Исправленная дата оплаты</label>
+  <input id="correction-date" type="date" required>
+  <label for="correction-provider">Способ оплаты</label>
+  <select id="correction-provider"><option value="stripe">Stripe</option><option value="paypal">PayPal</option></select>
+  <label for="correction-amount">Сумма</label>
+  <select id="correction-amount"><option value="10">$10</option><option value="20">$20</option></select>
+  <label for="correction-provider-id">ID платежа Stripe/PayPal</label>
+  <input id="correction-provider-id" autocomplete="off">
+  <label for="correction-note">Что исправлено и источник</label>
+  <input id="correction-note" required placeholder="Например: Источник PayPal, дата 23 июля исправлена на 23 августа">
+  <button id="correction-button" type="submit">Сохранить исправление</button>
+  <div id="correction-message" class="message"></div>
+</form>
 <form id="whitelist-form">
   <h3>Whitelist</h3>
   <label for="whitelist-id">Telegram ID</label>
@@ -352,6 +418,7 @@ button.secondary { background: #5f6368; }
 </form>
 <script>
 document.getElementById('paid-at').value = new Date().toISOString().slice(0, 10);
+document.getElementById('correction-date').value = new Date().toISOString().slice(0, 10);
 function showMessage(id, result) {
   const node = document.getElementById(id);
   node.textContent = result.message;
@@ -364,6 +431,17 @@ function request(button, messageId, method, payload) {
     .withFailureHandler(function(error) { button.disabled = false; showMessage(messageId, {ok: false, message: error.message || 'Не удалось выполнить действие'}); })
     [method](payload);
 }
+function lookup(inputId, resultId) {
+  const value = document.getElementById(inputId).value;
+  if (!value) return;
+  google.script.run.withSuccessHandler(function(result) {
+    const node = document.getElementById(resultId);
+    node.textContent = result.message;
+    node.style.color = result.ok ? '#137333' : '#c5221f';
+  }).withFailureHandler(function() {}).lookupPanelUser({telegram_id: value});
+}
+document.getElementById('payment-id').addEventListener('change', function() { lookup('payment-id', 'payment-member'); });
+document.getElementById('correction-id').addEventListener('change', function() { lookup('correction-id', 'correction-member'); });
 document.getElementById('payment-form').addEventListener('submit', function(event) {
   event.preventDefault();
   request(document.getElementById('payment-button'), 'payment-message', 'submitPanelPayment', {
@@ -372,6 +450,18 @@ document.getElementById('payment-form').addEventListener('submit', function(even
     payment_provider: document.getElementById('payment-provider').value,
     amount_usd: document.getElementById('amount-usd').value,
     provider_payment_id: document.getElementById('provider-payment-id').value
+  });
+});
+document.getElementById('correction-form').addEventListener('submit', function(event) {
+  event.preventDefault();
+  request(document.getElementById('correction-button'), 'correction-message', 'submitPanelPaymentCorrection', {
+    payment_id: document.getElementById('correction-payment-id').value,
+    telegram_id: document.getElementById('correction-id').value,
+    paid_at: document.getElementById('correction-date').value,
+    payment_provider: document.getElementById('correction-provider').value,
+    amount_usd: document.getElementById('correction-amount').value,
+    provider_payment_id: document.getElementById('correction-provider-id').value,
+    note: document.getElementById('correction-note').value
   });
 });
 function submitWhitelist(enabled) {
