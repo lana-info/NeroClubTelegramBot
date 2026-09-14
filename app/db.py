@@ -87,6 +87,9 @@ class Database:
                     status TEXT NOT NULL,
                     applied_until TEXT,
                     error TEXT,
+                    payment_provider TEXT,
+                    amount_usd INTEGER,
+                    provider_payment_id TEXT,
                     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -209,3 +212,10 @@ class Database:
                 db.execute("ALTER TABLE users ADD COLUMN telegram_ban_source TEXT")
             if "reminders_enabled" not in columns:
                 db.execute("ALTER TABLE users ADD COLUMN reminders_enabled INTEGER NOT NULL DEFAULT 0")
+            payment_columns = {row[1] for row in db.execute("PRAGMA table_info(sheet_payment_results)").fetchall()}
+            if "payment_provider" not in payment_columns:
+                db.execute("ALTER TABLE sheet_payment_results ADD COLUMN payment_provider TEXT")
+            if "amount_usd" not in payment_columns:
+                db.execute("ALTER TABLE sheet_payment_results ADD COLUMN amount_usd INTEGER")
+            if "provider_payment_id" not in payment_columns:
+                db.execute("ALTER TABLE sheet_payment_results ADD COLUMN provider_payment_id TEXT")

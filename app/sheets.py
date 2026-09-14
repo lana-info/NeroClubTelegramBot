@@ -36,6 +36,7 @@ SETTINGS_DESCRIPTIONS = {
 
 SHEET_PAYMENT_HEADERS = [
     "payment_id", "telegram_id", "paid_at", "plan", "status", "applied_until", "processed_at", "error",
+    "payment_provider", "amount_usd", "provider_payment_id",
 ]
 
 
@@ -78,6 +79,9 @@ def _payment_result(row: sqlite3.Row, *, status: str | None = None) -> dict[str,
         "status": status or row["status"],
         "applied_until": (row["applied_until"] or "")[:10],
         "error": row["error"] or "",
+        "payment_provider": row["payment_provider"] or "",
+        "amount_usd": row["amount_usd"] or "",
+        "provider_payment_id": row["provider_payment_id"] or "",
     }
 
 
@@ -98,6 +102,9 @@ def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -
         if isinstance(telegram_id, str) and telegram_id.isdigit():
             telegram_id = int(telegram_id)
         paid_at = payload.get("paid_at")
+        payment_provider = str(payload.get("payment_provider") or "").strip().lower()
+        amount_usd = payload.get("amount_usd")
+        provider_payment_id = str(payload.get("provider_payment_id") or "").strip()
         error = ""
         user = None
         paid_at_value = None
@@ -112,9 +119,29 @@ def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -
                 user = db.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
                 if not user:
                     error = "user not found for telegram_id"
+        if not error and payment_provider and payment_provider not in {"stripe", "paypal"}:
+            error = "payment_provider must be stripe or paypal"
+        if not error and amount_usd not in {None, ""}:
+            try:
+                amount_usd = int(amount_usd)
+            except (TypeError, ValueError):
+                error = "amount_usd must be 10 or 20"
+            if not error and amount_usd not in {10, 20}:
+                error = "amount_usd must be 10 or 20"
+
+        if payment_provider and provider_payment_id:
+            provider_duplicate = db.execute(
+                "SELECT * FROM sheet_payment_results WHERE payment_provider = ? AND provider_payment_id = ?",
+                (payment_provider, provider_payment_id),
+            ).fetchone()
+            if provider_duplicate:
+                results.append(_payment_result(provider_duplicate, status="duplicate"))
+                continue
 
         event_payload = json.dumps({
             "payment_id": payment_id, "telegram_id": telegram_id, "paid_at": paid_at, "plan": "monthly",
+            "payment_provider": payment_provider, "amount_usd": amount_usd,
+            "provider_payment_id": provider_payment_id,
         }, ensure_ascii=False)
         inserted_event = db.execute(
             "INSERT OR IGNORE INTO inbox_events(provider, external_event_id, event_type, payload, processed_at) "
@@ -160,10 +187,11 @@ def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -
 
         db.execute(
             """INSERT INTO sheet_payment_results
-               (payment_id, user_id, telegram_id, paid_at, plan, status, applied_until, error)
-               VALUES (?, ?, ?, ?, 'monthly', ?, ?, ?)""",
+               (payment_id, user_id, telegram_id, paid_at, plan, status, applied_until, error,
+                payment_provider, amount_usd, provider_payment_id)
+               VALUES (?, ?, ?, ?, 'monthly', ?, ?, ?, ?, ?, ?)""",
             (payment_id, user["id"] if user else None, telegram_id, paid_at_value.isoformat() if paid_at_value else paid_at,
-             status, applied_until, error),
+             status, applied_until, error, payment_provider, amount_usd, provider_payment_id),
         )
         stored = db.execute("SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)).fetchone()
         results.append(_payment_result(stored))
@@ -176,6 +204,7 @@ def rows_for_payments_sheet(db: sqlite3.Connection) -> list[list[Any]]:
         rows.append([
             payment["payment_id"], payment["telegram_id"] or "", (payment["paid_at"] or "")[:10], payment["plan"],
             payment["status"], (payment["applied_until"] or "")[:10], payment["processed_at"], payment["error"] or "",
+            payment["payment_provider"] or "", payment["amount_usd"] or "", payment["provider_payment_id"] or "",
         ])
     return rows
 

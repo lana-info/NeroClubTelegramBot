@@ -1,6 +1,7 @@
 import hashlib
 import hmac
 import json
+import sqlite3
 import time
 import asyncio
 import httpx
@@ -238,6 +239,27 @@ def test_sheet_snapshot_import_is_idempotent_and_exposes_operational_rows(tmp_pa
         assert ["total_users", 1] in metrics
 
 
+def test_schema_adds_payment_accounting_columns_to_existing_database(tmp_path):
+    path = tmp_path / "legacy.db"
+    connection = sqlite3.connect(path)
+    connection.execute(
+        """CREATE TABLE sheet_payment_results (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, payment_id TEXT NOT NULL UNIQUE,
+            user_id INTEGER, telegram_id INTEGER, paid_at TEXT, plan TEXT,
+            status TEXT, applied_until TEXT, error TEXT, processed_at TEXT
+        )"""
+    )
+    connection.commit()
+    connection.close()
+
+    db = Database(f"sqlite:///{path}")
+    db.init_schema()
+    with db.connect() as connection:
+        columns = {row[1] for row in connection.execute("PRAGMA table_info(sheet_payment_results)")}
+
+    assert {"payment_provider", "amount_usd", "provider_payment_id"} <= columns
+
+
 def test_sheet_payment_extends_by_calendar_month_and_is_idempotent(tmp_path):
     db = database(tmp_path)
     with db.connect() as connection:
@@ -248,10 +270,16 @@ def test_sheet_payment_extends_by_calendar_month_and_is_idempotent(tmp_path):
             (user["id"],),
         )
         first = process_sheet_payments(connection, [
-            {"payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15"},
+            {"payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15",
+             "payment_provider": "stripe", "amount_usd": 10, "provider_payment_id": "pi_123"},
         ])
         second = process_sheet_payments(connection, [
-            {"payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15"},
+            {"payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15",
+             "payment_provider": "stripe", "amount_usd": 10, "provider_payment_id": "pi_123"},
+        ])
+        provider_duplicate = process_sheet_payments(connection, [
+            {"payment_id": "sheet-payment-2", "telegram_id": 42, "paid_at": "2026-01-15",
+             "payment_provider": "stripe", "amount_usd": 10, "provider_payment_id": "pi_123"},
         ])
         rows = rows_for_payments_sheet(connection)
         jobs = connection.execute("SELECT COUNT(*) FROM outbox_jobs WHERE kind = 'telegram.invite'").fetchone()[0]
@@ -259,14 +287,17 @@ def test_sheet_payment_extends_by_calendar_month_and_is_idempotent(tmp_path):
     assert first == [{
         "payment_id": "sheet-payment-1", "telegram_id": 42, "paid_at": "2026-01-15",
         "plan": "monthly", "status": "processed", "applied_until": "2026-02-28",
-        "error": "",
+        "error": "", "payment_provider": "stripe", "amount_usd": 10, "provider_payment_id": "pi_123",
     }]
     assert second[0]["status"] == "duplicate"
+    assert provider_duplicate[0]["status"] == "duplicate"
     assert second[0]["applied_until"] == "2026-02-28"
     assert rows[0] == [
         "payment_id", "telegram_id", "paid_at", "plan", "status", "applied_until", "processed_at", "error",
+        "payment_provider", "amount_usd", "provider_payment_id",
     ]
     assert rows[1][0:6] == ["sheet-payment-1", 42, "2026-01-15", "monthly", "processed", "2026-02-28"]
+    assert rows[1][8:11] == ["stripe", 10, "pi_123"]
     assert jobs == 1
 
 

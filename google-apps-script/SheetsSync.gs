@@ -16,6 +16,10 @@ const SITE_SHEET = 'Доступ к сайту';
 const DASHBOARD_SHEET = 'Dashboard';
 const SETTINGS_SHEET = 'Настройки';
 const PAYMENT_HEADERS = [
+  'payment_id', 'telegram_id', 'paid_at', 'plan', 'status', 'applied_until', 'processed_at', 'error',
+  'payment_provider', 'amount_usd', 'provider_payment_id'
+];
+const LEGACY_PAYMENT_HEADERS = [
   'payment_id', 'telegram_id', 'paid_at', 'plan', 'status', 'applied_until', 'processed_at', 'error'
 ];
 
@@ -112,6 +116,13 @@ function ensurePaymentsSheet_() {
     return sheet;
   }
   const current = sheet.getRange(1, 1, 1, PAYMENT_HEADERS.length).getDisplayValues()[0];
+  if (current.slice(0, LEGACY_PAYMENT_HEADERS.length).join('|') === LEGACY_PAYMENT_HEADERS.join('|') &&
+      current.slice(LEGACY_PAYMENT_HEADERS.length).every(function(value) { return !value; })) {
+    sheet.getRange(1, 1, 1, PAYMENT_HEADERS.length).setValues([PAYMENT_HEADERS]);
+    sheet.getRange(1, 1, 1, PAYMENT_HEADERS.length).setFontWeight('bold');
+    sheet.autoResizeColumns(1, PAYMENT_HEADERS.length);
+    return sheet;
+  }
   if (current.join('|') !== PAYMENT_HEADERS.join('|')) {
     throw new Error('Rename the existing payment history tab to "Платежи (архив)" before enabling payment sync');
   }
@@ -134,7 +145,11 @@ function syncPayments_() {
       paymentId = Utilities.getUuid();
       sheet.getRange(row + 1, index.payment_id + 1).setValue(paymentId);
     }
-    payments.push({payment_id: paymentId, telegram_id: telegramId, paid_at: paidAt});
+    payments.push({
+      payment_id: paymentId, telegram_id: telegramId, paid_at: paidAt,
+      payment_provider: value[index.payment_provider], amount_usd: value[index.amount_usd],
+      provider_payment_id: value[index.provider_payment_id]
+    });
   }
   if (payments.length) backendRequest_('/internal/sheets/payments', 'post', {payments: payments});
 }
@@ -173,7 +188,11 @@ function submitPanelPayment(form) {
   const paidAt = panelPaymentDate_(form.paid_at);
   const paymentId = Utilities.getUuid();
   const response = backendRequest_('/internal/sheets/payments', 'post', {
-    payments: [{payment_id: paymentId, telegram_id: telegramId, paid_at: paidAt}]
+    payments: [{
+      payment_id: paymentId, telegram_id: telegramId, paid_at: paidAt,
+      payment_provider: String(form.payment_provider || '').toLowerCase(),
+      amount_usd: Number(form.amount_usd), provider_payment_id: String(form.provider_payment_id || '').trim()
+    }]
   });
   refreshPanelViews_();
   const result = (response.payments || [])[0] || {};
@@ -299,7 +318,7 @@ body { font: 14px Arial, sans-serif; color: #202124; margin: 18px; }
 h2 { margin: 0 0 16px; font-size: 20px; }
 h3 { margin: 22px 0 8px; font-size: 15px; }
 label { display: block; margin: 10px 0 5px; font-weight: 600; }
-input { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #dadce0; border-radius: 5px; }
+input, select { box-sizing: border-box; width: 100%; padding: 9px; border: 1px solid #dadce0; border-radius: 5px; }
 button { width: 100%; margin-top: 14px; padding: 10px; color: #fff; background: #1a73e8; border: 0; border-radius: 5px; cursor: pointer; font-weight: 600; }
 button.secondary { background: #5f6368; }
 .message { display: none; margin-top: 12px; padding: 10px; border-radius: 5px; line-height: 1.35; }
@@ -313,6 +332,12 @@ button.secondary { background: #5f6368; }
   <input id="payment-id" required inputmode="numeric" autocomplete="off">
   <label for="paid-at">Дата оплаты</label>
   <input id="paid-at" type="date" required>
+  <label for="payment-provider">Способ оплаты</label>
+  <select id="payment-provider"><option value="stripe">Stripe</option><option value="paypal">PayPal</option></select>
+  <label for="amount-usd">Сумма</label>
+  <select id="amount-usd"><option value="10">$10</option><option value="20">$20</option></select>
+  <label for="provider-payment-id">ID платежа (необязательно)</label>
+  <input id="provider-payment-id" autocomplete="off">
   <button id="payment-button" type="submit">Продлить подписку</button>
   <div id="payment-message" class="message"></div>
 </form>
@@ -342,7 +367,10 @@ document.getElementById('payment-form').addEventListener('submit', function(even
   event.preventDefault();
   request(document.getElementById('payment-button'), 'payment-message', 'submitPanelPayment', {
     telegram_id: document.getElementById('payment-id').value,
-    paid_at: document.getElementById('paid-at').value
+    paid_at: document.getElementById('paid-at').value,
+    payment_provider: document.getElementById('payment-provider').value,
+    amount_usd: document.getElementById('amount-usd').value,
+    provider_payment_id: document.getElementById('provider-payment-id').value
   });
 });
 function submitWhitelist(enabled) {
