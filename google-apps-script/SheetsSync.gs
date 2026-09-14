@@ -216,6 +216,22 @@ function lookupPanelUser(form) {
   return {ok: true, message: name + ' · ' + email + ' · доступ до ' + until};
 }
 
+function lookupPanelPayments(form) {
+  const telegramId = panelTelegramId_(form.telegram_id);
+  const body = backendRequest_('/internal/sheets/payments', 'get');
+  const index = headerIndex_(body.headers || []);
+  const payments = (body.rows || []).filter(function(row) {
+    return String(row[index.telegram_id]) === telegramId && row[index.status] === 'processed';
+  }).map(function(row) {
+    return {
+      payment_id: row[index.payment_id], paid_at: String(row[index.paid_at] || '').slice(0, 10),
+      payment_provider: row[index.payment_provider] || 'stripe', amount_usd: row[index.amount_usd] || 10,
+      provider_payment_id: row[index.provider_payment_id] || ''
+    };
+  });
+  return {payments: payments};
+}
+
 function submitPanelPayment(form) {
   const telegramId = panelTelegramId_(form.telegram_id);
   const paidAt = panelPaymentDate_(form.paid_at);
@@ -393,8 +409,8 @@ button.secondary { background: #5f6368; }
   <label for="correction-id">Telegram ID</label>
   <input id="correction-id" required inputmode="numeric" autocomplete="off">
   <div id="correction-member" class="member"></div>
-  <label for="correction-payment-id">ID записи из вкладки «Платежи»</label>
-  <input id="correction-payment-id" required autocomplete="off">
+  <label for="correction-payment-id">Платёж для исправления</label>
+  <select id="correction-payment-id" required><option value="">Сначала укажите Telegram ID</option></select>
   <label for="correction-date">Исправленная дата оплаты</label>
   <input id="correction-date" type="date" required>
   <label for="correction-provider">Способ оплаты</label>
@@ -441,7 +457,34 @@ function lookup(inputId, resultId) {
   }).withFailureHandler(function() {}).lookupPanelUser({telegram_id: value});
 }
 document.getElementById('payment-id').addEventListener('change', function() { lookup('payment-id', 'payment-member'); });
-document.getElementById('correction-id').addEventListener('change', function() { lookup('correction-id', 'correction-member'); });
+function loadCorrectionPayments() {
+  const telegramId = document.getElementById('correction-id').value;
+  if (!telegramId) return;
+  google.script.run.withSuccessHandler(function(result) {
+    const select = document.getElementById('correction-payment-id');
+    select.innerHTML = '<option value="">Выберите платёж</option>';
+    (result.payments || []).forEach(function(payment) {
+      const option = document.createElement('option');
+      option.value = payment.payment_id;
+      option.textContent = payment.paid_at + ' · ' + payment.payment_provider + ' · $' + payment.amount_usd;
+      option.dataset.payment = JSON.stringify(payment);
+      select.appendChild(option);
+    });
+  }).lookupPanelPayments({telegram_id: telegramId});
+}
+document.getElementById('correction-id').addEventListener('change', function() {
+  lookup('correction-id', 'correction-member');
+  loadCorrectionPayments();
+});
+document.getElementById('correction-payment-id').addEventListener('change', function() {
+  const option = this.options[this.selectedIndex];
+  if (!option.dataset.payment) return;
+  const payment = JSON.parse(option.dataset.payment);
+  document.getElementById('correction-date').value = payment.paid_at;
+  document.getElementById('correction-provider').value = payment.payment_provider;
+  document.getElementById('correction-amount').value = payment.amount_usd;
+  document.getElementById('correction-provider-id').value = payment.provider_payment_id;
+});
 document.getElementById('payment-form').addEventListener('submit', function(event) {
   event.preventDefault();
   request(document.getElementById('payment-button'), 'payment-message', 'submitPanelPayment', {
