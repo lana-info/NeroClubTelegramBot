@@ -206,7 +206,7 @@ function writeBackendRows_(sheetName, endpoint) {
     return headers.map(function(header) { return responseIndex[header] === undefined ? '' : row[responseIndex[header]]; });
   });
   sheet.getRange(2, 1, Math.max(sheet.getMaxRows() - 1, output.length), headers.length).clearContent();
-  sheet.getRange(2, 1, output.length, headers.length).setValues(output);
+  if (output.length) sheet.getRange(2, 1, output.length, headers.length).setValues(output);
 }
 
 function syncAllSheets() {
