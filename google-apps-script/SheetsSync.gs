@@ -38,6 +38,7 @@ function onOpen() {
 }
 
 function showNeroClubSidebar() {
+  ensurePaymentsSheet_();
   SpreadsheetApp.getUi().showSidebar(
     HtmlService.createHtmlOutput(NERO_CLUB_PANEL_HTML).setTitle('Nero Club')
   );
