@@ -84,3 +84,21 @@ curl http://127.0.0.1:18080/health
 
 Эти значения не нужно присылать в чат или коммитить. Их вводят непосредственно
 в закрытый файл на сервере.
+
+## Текущая выкладка: 2026-09-27
+
+Рабочий проект находится в `/opt/bots-stack/nero-club-sheet-payment`,
+Compose использует `docker-compose.yml` и `docker-compose.override.yml`.
+Backend доступен локально на порту `18081`.
+
+Исправление выдачи ключей whitelist выложено поверх рабочего образа без
+обновления зависимостей. Обновлён только сервис `bot-backend`; scheduler,
+база и настройки сохранены. Образ: `nero-club-sheet-payment-bot-backend:whitelist-20260927`
+(он же текущий `latest`). В рабочей копии обновлены `app/telegram_updates.py`
+и `tests/test_telegram.py`; это локальные изменения поверх `18beecb`,
+которые нужно учитывать перед следующим обновлением из Git.
+
+Для отката сохранён образ `nero-club-sheet-payment-bot-backend:before-whitelist-20260927`
+и прежние файлы в `/opt/bots-stack/nero-club-backups/whitelist-20260927.UXYgt3`.
+Все 78 тестов прошли в новом образе; после запуска health endpoint вернул
+`status=ok`, контейнер получил статус `healthy`. Режим `dry_run=true` сохранён.

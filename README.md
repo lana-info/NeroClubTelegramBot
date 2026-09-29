@@ -71,8 +71,9 @@ The menu has one `🔔 Уведомления об оплате` toggle button a
 меню` button that re-sends the current menu after new features are deployed.
 
 In sheet payment mode, `/pay` shows `NEW_MEMBER_PRICE_USD` to a user without
-confirmed payment history and `RETURNING_MEMBER_PRICE_USD` to a returning user.
-It also shows separate one-time and recurring payment links for each category.
+confirmed payment history and asks them to request payment links using
+`💬 Связаться с администратором`. Returning users see `RETURNING_MEMBER_PRICE_USD`
+and their one-time and recurring payment links.
 The user menu keeps payment links and payment confirmation as separate actions.
 
 The scheduler starts together with the backend using `docker compose up -d`. It processes Stripe, site-access, personal Telegram invites and expired invite revocation hourly, reminders daily, and Telegram reconciliation daily. The scheduler uses the same `ADMIN_API_TOKEN` and does not expose an additional port.
@@ -81,7 +82,7 @@ To issue a fresh personal invite from Google Sheets, use `issue_invite` in the
 user row's `action` column. It is independent of removal `DRY_RUN`; the invite
 job still checks active access and creates a 24-hour, user-bound link.
 
-Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot only reveals it to the assigned active subscriber. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
+Application keys use `APP_KEYS_ENCRYPTION_KEY`. The protected admin API imports a key, while the bot reveals it to the assigned user with active club access, including whitelisted users without any payment. Whitelisting does not bypass an explicit access denial or Telegram ban, key expiry, revocation, or the app-key feature switch. The `Ключи приложений` tab keeps its separate sync in `KeysSync.gs`.
 
 The `Лицензии` tab is for explicit licenses issued outside the club. One row is
 one Telegram user and one application; duplicate the row when a person needs

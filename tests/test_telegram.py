@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timedelta, timezone
 
 import httpx
+import pytest
 from cryptography.fernet import Fernet
 
 from app.db import Database
@@ -156,28 +157,48 @@ def test_sheet_payment_source_does_not_start_stripe_checkout(tmp_path):
     assert "Подтверждение оплаты" in transport.calls[-2]["text"]
 
 
-def test_sheet_payment_links_use_new_member_price(tmp_path):
+@pytest.mark.parametrize("command", ["/pay", "/renew", "/payment_links", "💳 Получить ссылку на оплату"])
+@pytest.mark.parametrize("returning", [False, True])
+def test_sheet_payment_links_use_new_member_price(tmp_path, command, returning):
     db = Database(f"sqlite:///{tmp_path / 'payment-links.db'}")
     db.init_schema()
     transport = TelegramTransport()
     client = TelegramClient("test-token", transport=transport)
-    update = {"update_id": 19, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/pay"}}
+    update = {"update_id": 19, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": command}}
 
     with db.connect() as connection:
+        if returning:
+            user = connection.execute("INSERT INTO users(telegram_id) VALUES (42) RETURNING id").fetchone()
+            connection.execute(
+                "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, billing_status, payment_status) "
+                "VALUES (?, 'sheet', 'sheet-42', 'active', 'paid')", (user["id"],),
+            )
         asyncio.run(process_update(
             connection,
             update,
             client,
             payment_source="sheet",
             admin_telegram_ids=(99,),
+            returning_member_one_time_payment_url="https://pay.test/return-once",
+            returning_member_recurring_payment_url="https://pay.test/return-monthly",
             new_member_one_time_payment_url="https://pay.test/new-once",
             new_member_recurring_payment_url="https://pay.test/new-monthly",
         ))
 
     text = transport.calls[0]["text"]
-    assert "Сумма к оплате: 20 USD" in text
-    assert "https://pay.test/new-once" in text
-    assert "https://pay.test/new-monthly" in text
+    if returning:
+        assert "Сумма к оплате: 10 USD" in text
+        assert "https://pay.test/return-once" in text
+        assert "https://pay.test/return-monthly" in text
+    else:
+        assert "Стоимость клуба: $20" in text
+        assert "Связаться с администратором" in text
+        assert "напишите мне" in text
+        assert "https://" not in text
+        assert any(
+            button["text"] == "💬 Связаться с администратором"
+            for row in transport.calls[0]["reply_markup"]["keyboard"] for button in row
+        )
 
 
 def test_user_can_send_support_request_and_admin_can_reply(tmp_path):
@@ -371,23 +392,53 @@ def test_my_keys_includes_configured_download_links(tmp_path):
     assert "Скачать Windows: https://downloads.test/vibix.exe" in telegram_transport.calls[0]["text"]
 
 
-def test_my_keys_requires_paid_subscription_and_rejects_whitelist(tmp_path):
+@pytest.mark.parametrize("command", ["/my-keys", "🔑 Мои ключи"])
+@pytest.mark.parametrize(
+    "whitelist,override,banned,key_status,expiry,enabled,expected",
+    [
+        (1, "none", 0, "issued", None, True, "key"),
+        (1, "none", 0, "issued", "2999-09-30T00:00:00+00:00", True, "key"),
+        (0, "none", 0, "issued", None, True, "denied"),
+        (1, "deny", 0, "issued", None, True, "denied"),
+        (1, "none", 1, "issued", None, True, "denied"),
+        (1, "none", 0, "revoked", None, True, "empty"),
+        (1, "none", 0, "issued", "2000-01-01T00:00:00+00:00", True, "empty"),
+        (1, "none", 0, "issued", None, False, "disabled"),
+    ],
+)
+def test_my_keys_whitelist_without_payment(
+    tmp_path, command, whitelist, override, banned, key_status, expiry, enabled, expected,
+):
     db = Database(f"sqlite:///{tmp_path / 'keys-access.db'}")
     db.init_schema()
     telegram_transport = TelegramTransport()
     telegram = TelegramClient("test-token", transport=telegram_transport)
-    update = {"update_id": 26, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/my-keys"}}
+    encryption_key = Fernet.generate_key().decode()
+    update = {"update_id": 26, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": command}}
     with db.connect() as connection:
         user = connection.execute(
-            "INSERT INTO users(telegram_id, whitelist) VALUES (?, 1) RETURNING id", (42,)
+            "INSERT INTO users(telegram_id, whitelist, access_override, telegram_banned) "
+            "VALUES (?, ?, ?, ?) RETURNING id", (42, whitelist, override, banned),
         ).fetchone()
         create_app_key(connection, {
-            "key_id": "whitelist-key", "app_name": "Example App", "key": "must-not-show",
-            "user_id": user["id"],
-        }, Fernet.generate_key().decode())
-        assert asyncio.run(process_update(connection, update, telegram)) == "processed"
-    assert "оплаченной подписке" in telegram_transport.calls[0]["text"]
-    assert "must-not-show" not in telegram_transport.calls[0]["text"]
+            "key_id": "whitelist-key", "app_name": "Example App", "key": "whitelist-secret",
+            "user_id": user["id"], "status": key_status, "key_expires_at": expiry,
+        }, encryption_key)
+        assert asyncio.run(process_update(
+            connection, update, telegram, app_keys_encryption_key=encryption_key,
+            feature_flags={"app_keys": enabled},
+        )) == "processed"
+    text = telegram_transport.calls[0]["text"]
+    if expected == "key":
+        assert "whitelist-secret" in text
+        assert ("30.09.2999" if expiry else "бессрочный") in text
+    else:
+        assert "whitelist-secret" not in text
+        assert {
+            "denied": "Получение ключей приложений доступно",
+            "empty": "пока нет доступных ключей",
+            "disabled": "Выдача ключей временно приостановлена",
+        }[expected] in text
 
 
 def _chat_member_update(update_id, telegram_id, status, chat_id=-100):

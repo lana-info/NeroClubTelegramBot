@@ -203,12 +203,10 @@ async def process_update(
             "SELECT 1 FROM app_keys WHERE assigned_user_id = ? AND access_plan = 'license' "
             "AND status = 'issued' LIMIT 1", (user["id"],)
         ).fetchone())
-        if (user["whitelist"] and not has_explicit_license) or (
-            effective_access(user, subscription) != "active" and not has_explicit_license
-        ):
+        if effective_access(user, subscription) != "active" and not has_explicit_license:
             await telegram.send_message(
                 message_chat_id,
-                "Получение ключей приложений доступно только при оплаченной подписке на клуб.",
+                "Получение ключей приложений доступно при активном доступе к клубу или отдельной лицензии.",
             )
             return "processed"
         try:
@@ -218,7 +216,7 @@ async def process_update(
         if keys is None:
             text = "Выдача ключей пока не настроена. Обратитесь к администратору."
         elif not keys:
-            text = "Для вашей активной подписки пока нет доступных ключей."
+            text = "Для вас пока нет доступных ключей."
         else:
             items = []
             for item in keys:
@@ -261,23 +259,24 @@ async def process_update(
                     "AND (payment_status = 'paid' OR provider_paid_until IS NOT NULL) LIMIT 1",
                     (user["id"],),
                 ).fetchone() is not None
-                price = returning_member_price_usd if has_paid_history else new_member_price_usd
-                one_time_url = (
-                    returning_member_one_time_payment_url
-                    if has_paid_history else new_member_one_time_payment_url
-                )
-                recurring_url = (
-                    returning_member_recurring_payment_url
-                    if has_paid_history else new_member_recurring_payment_url
-                )
-                text = (
-                    "Выберите способ оплаты:\n"
-                    f"Сумма к оплате: {price} USD.\n\n"
-                    f"• Разовая оплата: {one_time_url or 'ссылка будет добавлена администратором'}\n"
-                    f"• Подписка с ежемесячным автосписанием (можно отменить в любое время): "
-                    f"{recurring_url or 'ссылка будет добавлена администратором'}\n\n"
-                    "Если хотите, после оплаты сообщите об оплате администратору через кнопку «🧾 Сообщить об оплате»."
-                )
+                if not has_paid_history:
+                    text = (
+                        f"Стоимость клуба: ${new_member_price_usd}.\n\n"
+                        "Чтобы получить ссылки на оплату, нажмите кнопку "
+                        "«💬 Связаться с администратором» и напишите мне."
+                    )
+                else:
+                    price = returning_member_price_usd
+                    one_time_url = returning_member_one_time_payment_url
+                    recurring_url = returning_member_recurring_payment_url
+                    text = (
+                        "Выберите способ оплаты:\n"
+                        f"Сумма к оплате: {price} USD.\n\n"
+                        f"• Разовая оплата: {one_time_url or 'ссылка будет добавлена администратором'}\n"
+                        f"• Подписка с ежемесячным автосписанием (можно отменить в любое время): "
+                        f"{recurring_url or 'ссылка будет добавлена администратором'}\n\n"
+                        "Если хотите, после оплаты сообщите об оплате администратору через кнопку «🧾 Сообщить об оплате»."
+                    )
             elif stripe_secret_key and stripe_price_id:
                 session = await create_checkout_session(
                     stripe_secret_key,
