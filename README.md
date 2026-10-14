@@ -92,6 +92,17 @@ through `Мои ключи`, even without a club subscription. Use `revoke` to r
 that entitlement. Keep access to this tab limited to administrators because
 license keys are credentials.
 
+After changing application keys on either service, run
+`python3 tools/check_license_registry.py` on the Docker host. Also run
+`python3 tools/check_key_delivery.py` to exercise every assigned user through
+the real handler on an in-memory database copy, including `/my_keys` and
+expired club subscriptions. Neither check sends Telegram messages.
+The registry check detects mismatched keys, products and inactive licenses without exporting
+plaintext keys. It must exit successfully before considering a key change
+complete. Also test activation, validation and the pinned client signature in
+a rollback transaction; the registry check alone does not test those paths.
+Changing a key only on the license server leaves the bot's stored key obsolete.
+
 Set `ADMIN_TELEGRAM_IDS` to a comma-separated list of numeric Telegram IDs. Users can choose `💬 Связаться с администратором`; administrators receive the request and answer with `/reply REQUEST_ID TEXT`.
 
 After configuring `TELEGRAM_BOT_TOKEN` and `TELEGRAM_WEBHOOK_URL`, call the protected
@@ -103,11 +114,38 @@ To connect the operational panel, copy `google-apps-script/SheetsSync.gs`,
 spreadsheet. Set Script Properties `BACKEND_URL` and `ADMIN_API_TOKEN`. Run
 `importCurrentSnapshot()` once before the first pull sync; it imports users and
 subscription dates and replaces legacy `user_id` values with backend IDs. Then
-run `syncAllSheets()` once and `installSheetsSyncTrigger()` once. Every five
-minutes the panel first imports new or edited user rows, then executes commands
-and refreshes users, site access, and Dashboard. If the backend has no users,
-pull sync stops instead of erasing the sheet. Never store bot, payment,
+run `syncAllSheets()` once and `installSheetsSyncTrigger()` once. The installed
+edit trigger processes payments and commands, then refreshes the panel from the
+backend. User rows are output: direct edits to email or subscription dates are
+not imported and will be overwritten. Use the panel forms to save changes.
+Never store bot, payment,
 WordPress, or encryption secrets in the sheet.
+
+В меню **Nero Club → Открыть панель** доступны формы:
+
+- **Добавить пользователя**: Telegram ID обязателен; username и e-mail необязательны.
+  Существующий профиль не перезаписывается, оплата и доступ автоматически не выдаются.
+- **Изменить email или ручной срок доступа**: укажите Telegram ID и заполните
+  только нужные поля. Пустые поля не меняются. Кнопка «Сохранить изменения»
+  сохраняет правку на сервере, поэтому последующее обновление таблицы её не стирает.
+  Ручной срок действует до конца выбранного дня UTC, в том числе без платежей.
+  Он не сокращает оплаченный доступ и не снимает ручной запрет или Telegram-бан.
+  Оплаченный срок меняется через внесение или исправление платежа.
+- **Удалить платёж**: укажите Telegram ID, выберите проведённый платёж, заполните
+  причину и подтвердите удаление. Платёж исчезнет из вкладки «Платежи», оставшиеся
+  оплаты пересчитываются в порядке внесения. Запись об удалении остаётся во вкладке
+  «Исправления оплат» и серверном аудите; повторный импорт не восстановит платёж.
+  Деньги через Stripe/PayPal эта форма не возвращает. Whitelist и ручные права
+  сохраняются. Для старых записей с неопределённым исходным сроком сервер отклоняет
+  удаление и просит проверить историю.
+
+Для подключения новых форм сначала обновите backend, затем замените код
+`google-apps-script/SheetsSync.gs` в Apps Script и заново откройте панель.
+Повторный `importCurrentSnapshot()` не требуется. Схема базы расширяется при
+старте backend; перед обновлением нужна обычная резервная копия базы.
+Проверка логики форм без Google Sheets: `node tests/sheet_forms_ui.cjs` и
+`node tests/sheet_user_edits_ui.cjs`. Для формы редактирования нужен также
+`app/sheet_user_edits.py` и обновлённые `app/main.py`/`app/access.py` на сервере.
 
 Tests:
 

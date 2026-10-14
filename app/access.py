@@ -21,9 +21,7 @@ def effective_access(user: sqlite3.Row, subscription: sqlite3.Row | None) -> str
         return "denied"
     if user["whitelist"] or user["access_override"] == "allow":
         return "active"
-    if not subscription:
-        return "denied"
-    paid_until = parse_dt(subscription["provider_paid_until"])
+    paid_until = parse_dt(subscription["provider_paid_until"]) if subscription else None
     manual_until = parse_dt(user["manual_access_until"])
     latest = max([d for d in (paid_until, manual_until) if d], default=None)
     return "active" if latest and latest > utc_now() else "denied"

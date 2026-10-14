@@ -9,6 +9,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, status
 from fastapi.responses import PlainTextResponse
 
 from .access import apply_command, effective_access, upsert_user
+from .sheet_user_edits import edit_sheet_user
 from .keys import AppKeyError, create_app_key, revoke_app_key, sync_app_key_rows, sync_license_rows
 from .config import settings
 from .db import Database
@@ -30,7 +31,7 @@ from .membership import (
 from .reminders import send_subscription_reminders
 from .dashboard import rows_as_csv, rows_for_dashboard
 from .sheets import (
-    correct_sheet_payment, dashboard_rows, import_users, process_sheet_payments, rows_for_payment_corrections_sheet, rows_for_payments_sheet,
+    create_sheet_user, delete_sheet_payment, correct_sheet_payment, dashboard_rows, import_users, process_sheet_payments, rows_for_payment_corrections_sheet, rows_for_payments_sheet,
     rows_for_site_access_sheet, rows_for_users_sheet, sync_whitelists,
 )
 from .sheets import rows_for_settings_sheet
@@ -76,6 +77,37 @@ def import_sheet_snapshot(payload: dict[str, Any], _: str = Depends(require_admi
     try:
         with db.connect() as connection:
             return {"users": import_users(connection, rows)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/sheets/users", status_code=201)
+def add_sheet_user(payload: dict[str, Any], actor: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        with db.connect() as connection:
+            return {"user": create_sheet_user(connection, payload, actor)}
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.patch("/internal/sheets/users/{telegram_id}")
+def edit_panel_user(telegram_id: int, payload: dict[str, Any], actor: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        with db.connect() as connection:
+            return {"user": edit_sheet_user(connection, telegram_id, payload, actor)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@app.post("/internal/sheets/payment-deletions")
+def delete_payment(payload: dict[str, Any], actor: str = Depends(require_admin)) -> dict[str, Any]:
+    try:
+        with db.connect() as connection:
+            return {"payment": delete_sheet_payment(connection, payload, actor)}
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

@@ -212,7 +212,8 @@ function lookupPanelUser(form) {
   if (!row) return {ok: false, message: 'Пользователь с таким Telegram ID не найден'};
   const name = row[index.username] || 'Имя не указано';
   const email = row[index.wordpress_email] || 'e-mail не указан';
-  const until = String(row[index.provider_paid_until] || '').slice(0, 10) || 'нет активной даты';
+  const until = [row[index.provider_paid_until], row[index.manual_access_until]]
+    .filter(Boolean).map(function(value) { return String(value).slice(0, 10); }).sort().pop() || 'нет активной даты';
   return {ok: true, message: name + ' · ' + email + ' · доступ до ' + until};
 }
 
@@ -230,6 +231,43 @@ function lookupPanelPayments(form) {
     };
   });
   return {payments: payments};
+}
+
+function submitPanelUser(form) {
+  const response = backendRequest_('/internal/sheets/users', 'post', {
+    telegram_id: Number(panelTelegramId_(form.telegram_id)),
+    username: String(form.username || '').trim(),
+    wordpress_email: String(form.wordpress_email || '').trim()
+  });
+  refreshPanelViews_();
+  return {ok: true, message: 'Пользователь добавлен. Telegram ID: ' + response.user.telegram_id + '. Теперь можно внести платёж.'};
+}
+
+function submitPanelUserEdit(form) {
+  const telegramId = panelTelegramId_(form.telegram_id);
+  const payload = {};
+  const email = String(form.wordpress_email || '').trim();
+  const until = String(form.manual_access_until || '').trim();
+  if (email) payload.wordpress_email = email;
+  if (until) payload.manual_access_until = panelPaymentDate_(until);
+  if (!Object.keys(payload).length) throw new Error('Введите email или выберите ручной срок доступа');
+  backendRequest_('/internal/sheets/users/' + telegramId, 'patch', payload);
+  try {
+    refreshPanelViews_();
+  } catch (error) {
+    return {ok: true, message: 'Изменения сохранены на сервере. Таблица пока не обновилась: ' + error.message};
+  }
+  return {ok: true, message: 'Изменения сохранены.' + (until ? ' Ручной срок действует включительно до конца выбранного дня (UTC). Оплаченный срок и платежи сохранены.' : '')};
+}
+
+function submitPanelPaymentDeletion(form) {
+  backendRequest_('/internal/sheets/payment-deletions', 'post', {
+    payment_id: String(form.payment_id || '').trim(),
+    telegram_id: panelTelegramId_(form.telegram_id),
+    note: String(form.note || '').trim(), confirmed: form.confirmed === true
+  });
+  refreshPanelViews_();
+  return {ok: true, message: 'Платёж удалён. Срок подписки пересчитан. Запись сохранена в журнале.'};
 }
 
 function submitPanelPayment(form) {
@@ -388,6 +426,32 @@ button.secondary { background: #5f6368; }
 .member { margin: 8px 0; color: #137333; line-height: 1.35; }
 </style></head><body>
 <h2>Nero Club</h2>
+<p>Для изменения данных используйте формы и кнопки ниже. Ячейки со списком пользователей показывают сохранённые данные и обновляются автоматически.</p>
+<form id="user-form">
+  <h3>Добавить пользователя</h3>
+  <label for="user-telegram-id">Telegram ID</label>
+  <input id="user-telegram-id" required inputmode="numeric" autocomplete="off">
+  <label for="user-username">Username (необязательно)</label>
+  <input id="user-username" autocomplete="off" placeholder="@username">
+  <label for="user-email">E-mail (необязательно)</label>
+  <input id="user-email" type="email" autocomplete="off">
+  <p>Создаёт запись без оплаты. Для личных сообщений пользователь должен запустить бота.</p>
+  <button id="user-button" type="submit">Добавить пользователя</button>
+  <div id="user-message" class="message"></div>
+</form>
+<form id="edit-user-form">
+  <h3>Изменить email или ручной срок доступа</h3>
+  <label for="edit-user-id">Telegram ID</label>
+  <input id="edit-user-id" required inputmode="numeric" autocomplete="off">
+  <div id="edit-user-member" class="member"></div>
+  <label for="edit-user-email">Новый email</label>
+  <input id="edit-user-email" type="email" autocomplete="off">
+  <label for="edit-user-until">Ручной доступ до (включительно, UTC)</label>
+  <input id="edit-user-until" type="date">
+  <p>Заполните только то, что хотите изменить. Пустые поля сохраняют прежние значения. Ручной срок не сокращает оплаченный доступ и не снимает блокировку.</p>
+  <button id="edit-user-button" type="submit">Сохранить изменения</button>
+  <div id="edit-user-message" class="message"></div>
+</form>
 <form id="payment-form">
   <h3>Добавить платёж</h3>
   <label for="payment-id">Telegram ID</label>
@@ -424,6 +488,19 @@ button.secondary { background: #5f6368; }
   <button id="correction-button" type="submit">Сохранить исправление</button>
   <div id="correction-message" class="message"></div>
 </form>
+<form id="deletion-form">
+  <h3>Удалить платёж</h3>
+  <label for="deletion-id">Telegram ID</label>
+  <input id="deletion-id" required inputmode="numeric" autocomplete="off">
+  <div id="deletion-member" class="member"></div>
+  <label for="deletion-payment-id">Платёж для удаления</label>
+  <select id="deletion-payment-id" required><option value="">Сначала укажите Telegram ID</option></select>
+  <label for="deletion-note">Причина удаления</label>
+  <input id="deletion-note" required placeholder="Например: ошибочно внесён повторно">
+  <p>Срок подписки будет пересчитан. Это может сократить доступ. Возврат денег в Stripe/PayPal не выполняется.</p>
+  <button id="deletion-button" type="submit" style="background:#c5221f">Удалить платёж</button>
+  <div id="deletion-message" class="message"></div>
+</form>
 <form id="whitelist-form">
   <h3>Whitelist</h3>
   <label for="whitelist-id">Telegram ID</label>
@@ -443,7 +520,14 @@ function showMessage(id, result) {
 function request(button, messageId, method, payload) {
   button.disabled = true;
   google.script.run
-    .withSuccessHandler(function(result) { button.disabled = false; showMessage(messageId, result); })
+    .withSuccessHandler(function(result) {
+      button.disabled = false;
+      showMessage(messageId, result);
+      if (result.ok) {
+        loadPanelPayments('correction');
+        loadPanelPayments('deletion');
+      }
+    })
     .withFailureHandler(function(error) { button.disabled = false; showMessage(messageId, {ok: false, message: error.message || 'Не удалось выполнить действие'}); })
     [method](payload);
 }
@@ -457,24 +541,74 @@ function lookup(inputId, resultId) {
   }).withFailureHandler(function() {}).lookupPanelUser({telegram_id: value});
 }
 document.getElementById('payment-id').addEventListener('change', function() { lookup('payment-id', 'payment-member'); });
-function loadCorrectionPayments() {
-  const telegramId = document.getElementById('correction-id').value;
+document.getElementById('edit-user-id').addEventListener('input', function() {
+  document.getElementById('edit-user-email').value = '';
+  document.getElementById('edit-user-until').value = '';
+  document.getElementById('edit-user-member').textContent = '';
+});
+document.getElementById('edit-user-id').addEventListener('change', function() { lookup('edit-user-id', 'edit-user-member'); });
+document.getElementById('edit-user-form').addEventListener('submit', function(event) {
+  event.preventDefault();
+  const email = document.getElementById('edit-user-email').value.trim();
+  const until = document.getElementById('edit-user-until').value;
+  if (!email && !until) {
+    showMessage('edit-user-message', {ok: false, message: 'Введите email или выберите ручной срок доступа'});
+    return;
+  }
+  request(document.getElementById('edit-user-button'), 'edit-user-message', 'submitPanelUserEdit', {
+    telegram_id: document.getElementById('edit-user-id').value,
+    wordpress_email: email, manual_access_until: until
+  });
+});
+function loadPanelPayments(prefix) {
+  const telegramId = document.getElementById(prefix + '-id').value;
+  const select = document.getElementById(prefix + '-payment-id');
+  select.innerHTML = '<option value="">Сначала укажите Telegram ID</option>';
   if (!telegramId) return;
+  select.innerHTML = '<option value="">Загрузка платежей...</option>';
   google.script.run.withSuccessHandler(function(result) {
-    const select = document.getElementById('correction-payment-id');
-    select.innerHTML = '<option value="">Выберите платёж</option>';
-    (result.payments || []).forEach(function(payment) {
+    if (document.getElementById(prefix + '-id').value !== telegramId) return;
+    const payments = result.payments || [];
+    select.innerHTML = payments.length ? '<option value="">Выберите платёж</option>' : '<option value="">Нет проведённых платежей</option>';
+    payments.forEach(function(payment) {
       const option = document.createElement('option');
       option.value = payment.payment_id;
-      option.textContent = payment.paid_at + ' · ' + payment.payment_provider + ' · $' + payment.amount_usd;
+      option.textContent = payment.paid_at + ' · ' + payment.payment_provider + ' · $' + payment.amount_usd + ' · ' + (payment.provider_payment_id || payment.payment_id);
       option.dataset.payment = JSON.stringify(payment);
       select.appendChild(option);
     });
+  }).withFailureHandler(function(error) {
+    if (document.getElementById(prefix + '-id').value !== telegramId) return;
+    select.innerHTML = '<option value="">Не удалось загрузить платежи</option>';
+    showMessage(prefix + '-message', {ok: false, message: error.message});
   }).lookupPanelPayments({telegram_id: telegramId});
 }
-document.getElementById('correction-id').addEventListener('change', function() {
-  lookup('correction-id', 'correction-member');
-  loadCorrectionPayments();
+['correction', 'deletion'].forEach(function(prefix) {
+  document.getElementById(prefix + '-id').addEventListener('input', function() {
+    document.getElementById(prefix + '-payment-id').innerHTML = '<option value="">Выберите пользователя заново</option>';
+  });
+  document.getElementById(prefix + '-id').addEventListener('change', function() {
+    lookup(prefix + '-id', prefix + '-member');
+    loadPanelPayments(prefix);
+  });
+});
+document.getElementById('user-form').addEventListener('submit', function(event) {
+  event.preventDefault();
+  request(document.getElementById('user-button'), 'user-message', 'submitPanelUser', {
+    telegram_id: document.getElementById('user-telegram-id').value,
+    username: document.getElementById('user-username').value,
+    wordpress_email: document.getElementById('user-email').value
+  });
+});
+document.getElementById('deletion-form').addEventListener('submit', function(event) {
+  event.preventDefault();
+  const select = document.getElementById('deletion-payment-id');
+  if (!select.value) return;
+  if (!window.confirm('Удалить платёж ' + select.options[select.selectedIndex].textContent + '? Срок подписки будет пересчитан.')) return;
+  request(document.getElementById('deletion-button'), 'deletion-message', 'submitPanelPaymentDeletion', {
+    payment_id: select.value, telegram_id: document.getElementById('deletion-id').value,
+    note: document.getElementById('deletion-note').value, confirmed: true
+  });
 });
 document.getElementById('correction-payment-id').addEventListener('change', function() {
   const option = this.options[this.selectedIndex];

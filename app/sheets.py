@@ -90,6 +90,8 @@ def _payment_result(row: sqlite3.Row, *, status: str | None = None) -> dict[str,
 
 
 def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not db.in_transaction:
+        db.execute("BEGIN IMMEDIATE")
     results: list[dict[str, Any]] = []
     for payload in rows:
         payment_id = payload.get("payment_id")
@@ -171,6 +173,14 @@ def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -
                 ).fetchall()
                 if raw and (parse := _sheet_datetime(raw))
             ]
+            if not db.execute(
+                "SELECT 1 FROM sheet_payment_results WHERE user_id = ? AND status IN ('processed', 'deleted')",
+                (user["id"],),
+            ).fetchone():
+                db.execute(
+                    "INSERT OR IGNORE INTO sheet_payment_baselines(user_id, paid_until) VALUES (?, ?)",
+                    (user["id"], max(paid_dates, default=None)),
+                )
             current_until = max((datetime.fromisoformat(value) for value in paid_dates), default=paid_at_value)
             applied_until = _add_calendar_month(max(current_until, paid_at_value)).isoformat()
             subscription_id = f"manual-{user['telegram_id']}"
@@ -204,7 +214,7 @@ def process_sheet_payments(db: sqlite3.Connection, rows: list[dict[str, Any]]) -
 
 def rows_for_payments_sheet(db: sqlite3.Connection) -> list[list[Any]]:
     rows: list[list[Any]] = [SHEET_PAYMENT_HEADERS]
-    for payment in db.execute("SELECT * FROM sheet_payment_results ORDER BY id").fetchall():
+    for payment in db.execute("SELECT * FROM sheet_payment_results WHERE status != 'deleted' ORDER BY id").fetchall():
         rows.append([
             payment["payment_id"], payment["telegram_id"] or "", (payment["paid_at"] or "")[:10], payment["plan"],
             payment["status"], (payment["applied_until"] or "")[:10], payment["processed_at"], payment["error"] or "",
@@ -300,6 +310,97 @@ def correct_sheet_payment(db: sqlite3.Connection, payload: dict[str, Any]) -> di
             }, ensure_ascii=False)),
         )
     return after
+
+
+def create_sheet_user(db: sqlite3.Connection, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+    telegram_id = payload.get("telegram_id")
+    if type(telegram_id) is not int or not 0 < telegram_id <= 2**53 - 1:
+        raise ValueError("Telegram ID должен быть положительным целым числом")
+    if not db.in_transaction:
+        db.execute("BEGIN IMMEDIATE")
+    if db.execute("SELECT 1 FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone():
+        raise ValueError("Пользователь с таким Telegram ID уже существует")
+    username = str(payload.get("username") or "").strip().lstrip("@")
+    email = str(payload.get("wordpress_email") or "").strip()
+    if email and ("@" not in email or any(char.isspace() for char in email)):
+        raise ValueError("Укажите корректный e-mail")
+    user = upsert_user(db, {
+        "telegram_id": telegram_id, "telegram_username": username or None,
+        "wordpress_email": email or None,
+    })
+    db.execute(
+        "INSERT INTO audit_log(actor, action, user_id, details) VALUES (?, 'sheets.create_user', ?, ?)",
+        (actor, user["id"], json.dumps({"telegram_id": telegram_id})),
+    )
+    return {"user_id": user["id"], "telegram_id": telegram_id}
+
+
+def delete_sheet_payment(db: sqlite3.Connection, payload: dict[str, Any], actor: str) -> dict[str, Any]:
+    payment_id = payload.get("payment_id")
+    note = str(payload.get("note") or "").strip()
+    if not isinstance(payment_id, str) or not payment_id or not note:
+        raise ValueError("Укажите платёж и причину удаления")
+    if payload.get("confirmed") is not True:
+        raise ValueError("Подтвердите удаление платежа и пересчёт подписки")
+    # Serialize read/recalculate/write against simultaneous payment imports.
+    if not db.in_transaction:
+        db.execute("BEGIN IMMEDIATE")
+    payment = db.execute("SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)).fetchone()
+    if not payment:
+        raise LookupError("Платёж не найден")
+    if str(payload.get("telegram_id") or "") != str(payment["telegram_id"]):
+        raise ValueError("Платёж не принадлежит этому Telegram ID")
+    if payment["status"] == "deleted":
+        return {"payment_id": payment_id, "status": "deleted"}
+    if payment["status"] != "processed":
+        raise ValueError("Удалить можно только проведённый платёж")
+    user_id = payment["user_id"]
+    baseline = db.execute("SELECT paid_until FROM sheet_payment_baselines WHERE user_id = ?", (user_id,)).fetchone()
+    if baseline is None:
+        # Imported balances in older installations live in separate subscriptions.
+        other_dates = [datetime.fromisoformat(_sheet_datetime(raw)) for raw, in db.execute(
+            "SELECT provider_paid_until FROM subscriptions WHERE user_id = ? AND payment_status = 'paid' "
+            "AND NOT (provider = 'sheet' AND provider_subscription_id = ?)",
+            (user_id, f"manual-{payment['telegram_id']}"),
+        ) if raw]
+        original_until = max(other_dates, default=None)
+        first = db.execute(
+            "SELECT * FROM sheet_payment_results WHERE user_id = ? AND status = 'processed' ORDER BY id LIMIT 1",
+            (user_id,),
+        ).fetchone()
+        first_date = _sheet_payment_date(first["paid_at"])
+        if _add_calendar_month(max([first_date] + other_dates)).isoformat() != first["applied_until"]:
+            raise ValueError("Исходный срок старых оплат не установлен. Нужна проверка истории перед удалением")
+        db.execute("INSERT INTO sheet_payment_baselines(user_id, paid_until) VALUES (?, ?)",
+                   (user_id, original_until.isoformat() if original_until else None))
+    else:
+        original_until = datetime.fromisoformat(baseline["paid_until"]) if baseline["paid_until"] else None
+    before = _payment_result(payment)
+    db.execute("UPDATE sheet_payment_results SET status = 'deleted', applied_until = NULL WHERE payment_id = ?", (payment_id,))
+    until = original_until
+    for remaining in db.execute(
+        "SELECT * FROM sheet_payment_results WHERE user_id = ? AND status = 'processed' ORDER BY id", (user_id,),
+    ).fetchall():
+        paid_at = _sheet_payment_date(remaining["paid_at"])
+        until = _add_calendar_month(max(paid_at, until) if until else paid_at)
+        db.execute("UPDATE sheet_payment_results SET applied_until = ? WHERE payment_id = ?",
+                   (until.isoformat(), remaining["payment_id"]))
+    db.execute(
+        "UPDATE subscriptions SET provider_paid_until = ?, payment_status = ?, billing_status = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE user_id = ? AND provider = 'sheet' AND provider_subscription_id = ?",
+        (until.isoformat() if until else None, "paid" if until else "pending",
+         "active" if until else "cancelled", user_id, f"manual-{payment['telegram_id']}"),
+    )
+    after = _payment_result(db.execute("SELECT * FROM sheet_payment_results WHERE payment_id = ?", (payment_id,)).fetchone())
+    db.execute(
+        "INSERT INTO sheet_payment_corrections(payment_id, user_id, before_json, after_json, note) VALUES (?, ?, ?, ?, ?)",
+        (payment_id, user_id, json.dumps(before, ensure_ascii=False), json.dumps(after, ensure_ascii=False), "Удаление: " + note),
+    )
+    db.execute(
+        "INSERT INTO audit_log(actor, action, user_id, details) VALUES (?, 'sheets.delete_payment', ?, ?)",
+        (actor, user_id, json.dumps({"payment_id": payment_id, "note": note}, ensure_ascii=False)),
+    )
+    return {"payment_id": payment_id, "status": "deleted", "paid_until": until.isoformat() if until else None}
 
 
 def rows_for_payment_corrections_sheet(db: sqlite3.Connection) -> list[list[Any]]:

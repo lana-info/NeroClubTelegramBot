@@ -61,4 +61,5 @@ def command_from_text(text: str | None) -> str | None:
         return BUTTON_COMMANDS[normalized]
     if not normalized.startswith("/"):
         return None
-    return normalized.split()[0].split("@", 1)[0]
+    command = normalized.split()[0].split("@", 1)[0]
+    return "/my-keys" if command == "/my_keys" else command

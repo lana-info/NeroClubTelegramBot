@@ -340,13 +340,14 @@ def test_site_access_repeat_includes_account_email_for_recovery(tmp_path):
     )
 
 
-def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
+@pytest.mark.parametrize("command", ["/my-keys", "/my_keys", "/my_keys@Etsy_NeuroClub_Bot", "🔑 Мои ключи"])
+def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path, command):
     db = Database(f"sqlite:///{tmp_path / 'keys.db'}")
     db.init_schema()
     telegram_transport = TelegramTransport()
     telegram = TelegramClient("test-token", transport=telegram_transport)
     encryption_key = Fernet.generate_key().decode()
-    update = {"update_id": 12, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": "/my-keys"}}
+    update = {"update_id": 12, "message": {"chat": {"id": 42}, "from": {"id": 42}, "text": command}}
     with db.connect() as connection:
         user = connection.execute(
             "INSERT INTO users(telegram_id) VALUES (?) RETURNING id", (42,)
@@ -363,6 +364,42 @@ def test_my_keys_delivers_key_and_expiry_to_active_subscriber(tmp_path):
         assert asyncio.run(process_update(connection, update, telegram, app_keys_encryption_key=encryption_key)) == "processed"
     assert "secret-value" in telegram_transport.calls[0]["text"]
     assert "30.09.2999" in telegram_transport.calls[0]["text"]
+
+
+@pytest.mark.parametrize("command", ["/my-keys", "/my_keys", "/my_keys@Etsy_NeuroClub_Bot", "🔑 Мои ключи"])
+def test_my_keys_perpetual_licenses_work_after_subscription_ends(tmp_path, command):
+    db = Database(f"sqlite:///{tmp_path / 'perpetual-keys.db'}")
+    db.init_schema()
+    transport = TelegramTransport()
+    telegram = TelegramClient("test-token", transport=transport)
+    encryption_key = Fernet.generate_key().decode()
+    with db.connect() as connection:
+        user = connection.execute(
+            "INSERT INTO users(telegram_id) VALUES (42) RETURNING id",
+        ).fetchone()
+        connection.execute(
+            "INSERT INTO subscriptions(user_id, provider, provider_subscription_id, provider_paid_until) "
+            "VALUES (?, 'sheet', 'ended-subscription', '2000-01-01T00:00:00+00:00')",
+            (user["id"],),
+        )
+        for app_name in ("Clipart Generator", "TrendWatcher Video"):
+            create_app_key(connection, {
+                "key_id": app_name, "app_name": app_name,
+                "key": f"test-key-{app_name}", "user_id": user["id"],
+                "access_plan": "license", "key_expires_at": None,
+            }, encryption_key)
+        result = asyncio.run(process_update(connection, {
+            "update_id": 50,
+            "message": {"chat": {"id": 42, "type": "private"}, "from": {"id": 42}, "text": command},
+        }, telegram, app_keys_encryption_key=encryption_key))
+        assert result == "processed"
+        assert connection.execute("SELECT COUNT(*) FROM app_keys WHERE status='issued'").fetchone()[0] == 2
+    assert len(transport.calls) == 1
+    assert transport.calls[0]["chat_id"] == 42
+    text = transport.calls[0]["text"]
+    assert "test-key-Clipart Generator" in text
+    assert "test-key-TrendWatcher Video" in text
+    assert text.count("бессрочный") == 2
 
 
 def test_my_keys_includes_configured_download_links(tmp_path):

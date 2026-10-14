@@ -93,6 +93,11 @@ class Database:
                     processed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS sheet_payment_baselines (
+                    user_id INTEGER PRIMARY KEY REFERENCES users(id),
+                    paid_until TEXT
+                );
+
                 CREATE TABLE IF NOT EXISTS sheet_payment_corrections (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     payment_id TEXT NOT NULL REFERENCES sheet_payment_results(payment_id),
