@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import secrets
 import sqlite3
 from typing import Any
 
 from .access import effective_access
+from .club_access import refresh_club_member, ClubCheckError
 from .integrations.telegram import TelegramClient, TelegramError
 from .integrations.wordpress import WordPressClient, WordPressError
 
@@ -33,6 +35,8 @@ async def issue_site_credentials(
     *,
     idempotency_key: str,
     allow_redelivery: bool = False,
+    club_chat_id: str | int | None = None,
+    technical_email: bool = False,
 ) -> dict[str, Any]:
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     if not user:
@@ -40,38 +44,49 @@ async def issue_site_credentials(
     subscription = db.execute(
         "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
     ).fetchone()
-    if effective_access(user, subscription) != "active":
+    allowed = await refresh_club_member(db, user_id, telegram, club_chat_id) if club_chat_id else effective_access(user, subscription) == "active"
+    if not allowed:
         raise SiteAccessError("site access requires an active subscription")
     if user["site_credentials_delivered_at"] and not allow_redelivery:
+        if club_chat_id:
+            try:
+                await wordpress.sync_user({"action":"restore","user_id":user["wordpress_user_id"] or 0,"username":user["wordpress_login"] or "","email":user["wordpress_email"] or ""},idempotency_key+"-restore")
+            except WordPressError as exc:
+                raise SiteAccessError("site access delivery failed") from exc
         raise SiteAccessError("site credentials were already delivered")
     if not isinstance(user["telegram_id"], int):
         raise SiteAccessError("telegram_id is required")
 
+    login = user["wordpress_login"] or f"nero_tg_{user['telegram_id']}"
+    email = user["wordpress_email"] or (f"tg.{user['telegram_id']}@example.invalid" if technical_email else "")
+    if not email:
+        raise SiteAccessError("site email is missing")
     password = secrets.token_urlsafe(18)
     try:
         result = await wordpress.sync_user(
             {
                 "action": "create_or_activate",
                 "user_id": user["wordpress_user_id"] or 0,
-                "username": user["wordpress_login"] or "",
-                "email": user["wordpress_email"] or "",
+                "username": login,
+                "email": email,
                 "role": user["wordpress_role"] or "subscriber",
                 "password": password,
             },
-            idempotency_key,
+            idempotency_key + "-" + hashlib.sha256(password.encode()).hexdigest()[:16],
         )
         await telegram.send_message(
             user["telegram_id"],
             "Доступ к сайту выдан.\n"
-            f"Email: {user['wordpress_email']}\n"
+            "Сайт: https://wiki.etsyneuroclub.com\n"
+            f"Email: {email}\n"
             f"Логин: {result['login']}\n"
             f"Первоначальный пароль: {password}\n\n"
             "Войдите на сайт и сразу замените его на свой личный пароль. "
             "Не пересылайте это сообщение.",
         )
         db.execute(
-            "UPDATE users SET site_credentials_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-            (user_id,),
+            "UPDATE users SET wordpress_user_id=?, wordpress_login=?, wordpress_email=?, site_credentials_delivered_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (int(result["user_id"]), result["login"], email, user_id),
         )
     except (WordPressError, TelegramError, KeyError) as exc:
         raise SiteAccessError("site access delivery failed") from exc
@@ -87,6 +102,8 @@ async def process_pending_site_access_jobs(
     dry_run: bool = False,
     wordpress_access_enabled: bool = True,
     wordpress_deactivation_enabled: bool = True,
+    club_chat_id: str | int | None = None,
+    technical_email: bool = False,
 ) -> dict[str, int]:
     jobs = db.execute(
         "SELECT id, kind, aggregate_key, payload, attempts FROM outbox_jobs "
@@ -114,11 +131,19 @@ async def process_pending_site_access_jobs(
                     wordpress,
                     idempotency_key=f"{job['aggregate_key']}-attempt-{job['attempts'] + 1}",
                     allow_redelivery=payload.get("action") == "resend_delivery",
+                    club_chat_id=club_chat_id, technical_email=technical_email,
                 )
             else:
                 user = db.execute("SELECT * FROM users WHERE id = ?", (int(payload["user_id"]),)).fetchone()
                 if not user:
                     raise SiteAccessError("user not found")
+                # Re-evaluate stale automated jobs against the primary group.
+                if club_chat_id and not payload.get("command_id"):
+                    allowed = await refresh_club_member(db, user["id"], telegram, club_chat_id)
+                    if (payload["action"] == "deactivate" and allowed) or (payload["action"] == "restore" and not allowed):
+                        db.execute("UPDATE outbox_jobs SET status='done', processed_at=CURRENT_TIMESTAMP WHERE id=?", (job["id"],))
+                        processed += 1
+                        continue
                 result = await wordpress.sync_user(
                     {
                         "action": payload["action"],
@@ -135,7 +160,7 @@ async def process_pending_site_access_jobs(
                     (json.dumps(result, ensure_ascii=False), payload["command_id"]),
                 )
             processed += 1
-        except (SiteAccessError, WordPressError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        except (SiteAccessError, ClubCheckError, WordPressError, ValueError, KeyError, json.JSONDecodeError) as exc:
             db.execute(
                 "UPDATE outbox_jobs SET status = 'failed', attempts = attempts + 1, last_error = ? WHERE id = ?",
                 (str(exc), job["id"]),

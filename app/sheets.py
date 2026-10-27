@@ -481,20 +481,20 @@ def rows_for_users_sheet(db: sqlite3.Connection) -> list[list[Any]]:
     return rows
 
 
-def rows_for_site_access_sheet(db: sqlite3.Connection) -> list[list[Any]]:
+def rows_for_site_access_sheet(db: sqlite3.Connection, *, club_membership: bool = False) -> list[list[Any]]:
     rows: list[list[Any]] = [SITE_HEADERS]
     for user in db.execute("SELECT * FROM users ORDER BY id").fetchall():
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
         ).fetchone()
         command = _latest_command(db, user["id"])
-        access = effective_access(user, subscription)
+        access = ("active" if not user["telegram_banned"] and user["access_override"] != "deny" and user["telegram_membership_status"] in {"member","administrator","creator","restricted"} else "denied") if club_membership else effective_access(user, subscription)
         delivery = _latest_delivery(db, user["id"])
         rows.append([
             user["id"], user["telegram_id"], user["telegram_username"] or "",
             user["wordpress_login"] or "", user["wordpress_email"] or "", access,
             subscription["provider_paid_until"] if subscription else "",
-            "active" if access == "active" and user["wordpress_email"] else "denied",
+            "active" if access == "active" and (club_membership or user["wordpress_email"]) else "denied",
             delivery["status"] if delivery else "not_requested", "",
             delivery["status"] if delivery else "not_requested", delivery["created_at"] if delivery else "",
             "none", command["command_id"] if command else "", command["result"] if command else "",

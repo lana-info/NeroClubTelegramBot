@@ -15,6 +15,7 @@ from .config import settings
 from .db import Database
 from .webhooks import parse_event, verify_stripe_signature
 from .integrations.telegram import TelegramClient, TelegramError
+from .integrations.club_licenses import ClubLicenseClient, process_club_jobs
 from .integrations.wordpress import WordPressClient
 from .telegram_updates import process_update
 from .telegram_menu import BOT_COMMANDS
@@ -173,7 +174,7 @@ def update_sheet_whitelists(payload: dict[str, Any], actor: str = Depends(requir
 @app.get("/internal/sheets/site-access")
 def sheets_site_access(_: str = Depends(require_admin)) -> dict[str, Any]:
     with db.connect() as connection:
-        rows = rows_for_site_access_sheet(connection)
+        rows = rows_for_site_access_sheet(connection, club_membership=bool(settings.telegram_chat_id))
     return {"headers": rows[0], "rows": rows[1:], "count": len(rows) - 1}
 
 
@@ -339,6 +340,9 @@ async def telegram_webhook(request: Request, x_telegram_bot_api_secret_token: st
             result = await process_update(
                 connection, update, telegram, chat_id=telegram_chat_ids,
                 wordpress=wordpress,
+                club_chat_id=settings.telegram_chat_id or None,
+                technical_email=True,
+                club_licenses=ClubLicenseClient(settings.club_license_base_url, settings.club_license_service_secret) if settings.club_license_base_url else None,
                 app_keys_encryption_key=settings.app_keys_encryption_key,
                 admin_telegram_ids=settings.admin_telegram_ids,
                 payment_url=settings.payment_url,
@@ -426,6 +430,8 @@ async def reconcile_telegram(_: str = Depends(require_admin)) -> dict[str, int]:
                 site_deactivation_enabled=get_flags(connection)["wordpress_deactivation"],
                 admin_telegram_ids=settings.admin_telegram_ids,
                 chat_label="канале" if chat_id == settings.telegram_channel_id else "группе",
+                primary_group=str(chat_id) == str(settings.telegram_chat_id),
+                club_resource_sync=True,
             )
             for key in totals:
                 totals[key] += result[key]
@@ -509,13 +515,17 @@ async def process_site_access_jobs(_: str = Depends(require_admin)) -> dict[str,
     )
     with db.connect() as connection:
         flags = get_flags(connection)
+        if settings.club_license_base_url:
+            await process_club_jobs(connection, ClubLicenseClient(settings.club_license_base_url, settings.club_license_service_secret), telegram, settings.telegram_chat_id, dry_run=settings.club_resources_dry_run)
         return await process_pending_site_access_jobs(
             connection,
             telegram,
             wordpress,
-            dry_run=settings.dry_run,
+            dry_run=settings.club_resources_dry_run,
             wordpress_access_enabled=flags["wordpress_access"],
             wordpress_deactivation_enabled=flags["wordpress_deactivation"],
+            club_chat_id=settings.telegram_chat_id or None,
+            technical_email=True,
         )
 
 

@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Any
 
 from .access import effective_access, upsert_user
+from .club_access import ClubCheckError, refresh_club_member
 from .integrations.telegram import TelegramClient
 from .integrations.wordpress import WordPressClient
 from .stripe_checkout import StripeCheckoutError, create_checkout_session
@@ -40,6 +41,9 @@ async def process_update(
     checkout_success_url: str = "",
     checkout_cancel_url: str = "",
     feature_flags: dict[str, bool] | None = None,
+    club_chat_id: str | int | None = None,
+    technical_email: bool = False,
+    club_licenses=None,
 ) -> str:
     feature_flags = feature_flags or {
         "wordpress_access": True, "app_keys": True,
@@ -62,7 +66,7 @@ async def process_update(
             db,
             update_id,
             chat_member,
-            chat_id=chat_id,
+            chat_id=chat_id, club_chat_id=club_chat_id,
         )
 
     chat_join_request = update.get("chat_join_request")
@@ -203,20 +207,43 @@ async def process_update(
             "SELECT 1 FROM app_keys WHERE assigned_user_id = ? AND access_plan = 'license' "
             "AND status = 'issued' LIMIT 1", (user["id"],)
         ).fetchone())
-        if effective_access(user, subscription) != "active" and not has_explicit_license:
+        club_allowed = effective_access(user, subscription) == "active"
+        if club_chat_id:
+            try:
+                club_allowed = await refresh_club_member(db, user["id"], telegram, club_chat_id)
+            except ClubCheckError as exc:
+                await telegram.send_message(message_chat_id, str(exc))
+                _mark_telegram_update_processed(db, update_id)
+                return "processed"
+            if user["telegram_banned"] or user["access_override"] == "deny":
+                has_explicit_license = False
+        if not club_allowed and not has_explicit_license:
             await telegram.send_message(
                 message_chat_id,
                 "Получение ключей приложений доступно при активном доступе к клубу или отдельной лицензии.",
             )
             return "processed"
+        unavailable = []
+        withheld = set()
+        provisioning_failed = False
+        if club_allowed and club_licenses is not None:
+            try:
+                provisioned = await club_licenses.ensure_keys(db, user["id"], app_keys_encryption_key)
+                unavailable, withheld = provisioned["unavailable"], provisioned["withheld"]
+            except (AppKeyError, ValueError):
+                provisioning_failed = True
         try:
-            keys = keys_for_user(db, user["id"], app_keys_encryption_key)
+            keys = [item for item in keys_for_user(db, user["id"], app_keys_encryption_key, club_access=club_allowed) if item["app_name"] not in withheld]
         except (AppKeyError, ValueError):
             keys = None
         if keys is None:
             text = "Выдача ключей пока не настроена. Обратитесь к администратору."
         elif not keys:
             text = "Для вас пока нет доступных ключей."
+            if provisioning_failed:
+                text = "Не удалось получить ключи от сервера лицензий. Попробуйте позже."
+            elif unavailable:
+                text = "Лицензии уже существуют, но их коды недоступны для выдачи. Обратитесь к администратору; прежние ключи не менялись."
         else:
             items = []
             for item in keys:
@@ -232,6 +259,10 @@ async def process_update(
                     item_text += "\n" + "\n".join(download_lines)
                 items.append(item_text)
             text = "Ваши ключи приложений:\n\n" + "\n\n".join(items)
+        if provisioning_failed and keys:
+            text += "\n\nНе удалось проверить новые приложения. Показаны сохранённые ключи."
+        elif unavailable and keys:
+            text += "\n\nЧасть лицензий недоступна для выдачи. Обратитесь к администратору; прежние ключи не менялись."
         await telegram.send_message(message_chat_id, text)
     elif command in {"/report_payment", "/confirm_payment"}:
         if payment_source == "sheet":
@@ -303,7 +334,7 @@ async def process_update(
         subscription = db.execute(
             "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
         ).fetchone()
-        if effective_access(user, subscription) != "active":
+        if not club_chat_id and effective_access(user, subscription) != "active":
             await telegram.send_message(message_chat_id, "Доступ к сайту доступен только при активной подписке.")
         elif wordpress is None:
             await telegram.send_message(message_chat_id, "Доступ к сайту пока не настроен. Обратитесь к администратору.")
@@ -312,15 +343,23 @@ async def process_update(
                 await issue_site_credentials(
                     db, user["id"], telegram, wordpress,
                     idempotency_key=f"telegram-site-access-{update_id}",
+                    club_chat_id=club_chat_id, technical_email=technical_email,
                 )
-            except (SiteAccessError, ValueError) as exc:
+            except (SiteAccessError, ClubCheckError, ValueError) as exc:
                 text = "Не удалось выдать доступ к сайту. Попробуйте позже."
-                if str(exc) == "site credentials were already delivered":
+                if isinstance(exc, ClubCheckError):
+                    text = str(exc)
+                elif str(exc) == "site access requires an active subscription":
+                    text = "Доступ к сайту доступен участникам группы клуба без блокировки."
+                elif str(exc) == "site credentials were already delivered":
                     text = (
                         "Логин и первоначальный пароль уже были отправлены ранее.\n"
-                        f"Если доступ потерян, попробуйте его восстановить используя емейл: {user['wordpress_email']} "
+                        + (f"Логин: {user['wordpress_login']}\n" if user["wordpress_login"] else "")
+                        + f"Если доступ потерян, попробуйте его восстановить используя емейл: {user['wordpress_email']} "
                         "или обратитесь к администратору."
                     )
+                if str(exc) == "site credentials were already delivered" and (user["wordpress_email"] or "").endswith("@example.invalid"):
+                    text = f"Ваш логин: {user['wordpress_login']}. Первоначальный пароль уже был отправлен. Если он потерян, обратитесь к администратору: технический email не принимает почту."
                 await telegram.send_message(message_chat_id, text)
     elif message_text and not message_text.startswith("/"):
         pending = db.execute(
@@ -349,6 +388,7 @@ async def _process_chat_member_update(
     chat_member: dict[str, Any],
     *,
     chat_id: int | str | tuple[int | str, ...] | None,
+    club_chat_id: str | int | None = None,
 ) -> str:
     event_chat_id = (chat_member.get("chat") or {}).get("id")
     allowed_chat_ids = chat_id if isinstance(chat_id, tuple) else (chat_id,)
@@ -356,7 +396,12 @@ async def _process_chat_member_update(
         _mark_telegram_update_processed(db, update_id)
         return "ignored"
 
+    if club_chat_id and str(event_chat_id) != str(club_chat_id):
+        _mark_telegram_update_processed(db, update_id)
+        return "ignored"
     new_member = chat_member.get("new_chat_member") or {}
+    if new_member.get("status") == "restricted" and new_member.get("is_member") is not True:
+        new_member = {**new_member, "status": "left"}
     member_user = new_member.get("user") or {}
     telegram_id = member_user.get("id")
     status = new_member.get("status")
@@ -371,6 +416,9 @@ async def _process_chat_member_update(
         _mark_telegram_update_processed(db, update_id)
         return "ignored"
 
+    if club_chat_id:
+        db.execute("INSERT OR IGNORE INTO outbox_jobs(kind,aggregate_key,payload) VALUES ('club.access',?,?)",
+                   (f"telegram-club-{update_id}",json.dumps({"user_id":user["id"]})))
     previous_status = user["telegram_membership_status"]
     ban_source = user["telegram_ban_source"]
     if status == "kicked":
@@ -401,7 +449,7 @@ async def _process_chat_member_update(
             subscription = db.execute(
                 "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user["id"],)
             ).fetchone()
-            if effective_access(user, subscription) == "active":
+            if (club_chat_id and user["access_override"] != "deny") or effective_access(user, subscription) == "active":
                 queue_site_access_job(db, user["id"], "restore", f"telegram-restore-{update_id}")
 
     _mark_telegram_update_processed(db, update_id)

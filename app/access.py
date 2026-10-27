@@ -105,6 +105,13 @@ def apply_command(
             (until, user_id),
         )
 
+    if action in {"deny", "allow"}:
+        db.execute("INSERT OR IGNORE INTO outbox_jobs(kind,aggregate_key,payload) VALUES ('club.access',?,?)",
+                   (f"sheets-club-{command_id}",json.dumps({"user_id":user_id})))
+        if action == "deny":
+            db.execute("INSERT OR IGNORE INTO outbox_jobs(kind,aggregate_key,payload) VALUES ('site.deactivate',?,?)",
+                       (f"sheets-deny-{command_id}",json.dumps({"user_id":user_id,"action":"deactivate"})))
+
     restore_queued = False
     site_command_queued = False
     if action in {"revoke_site_access", "restore_site_access"}:

@@ -108,6 +108,12 @@ class Database:
                     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS club_license_products (
+                    external_key_id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    managed INTEGER NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS outbox_jobs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     kind TEXT NOT NULL,

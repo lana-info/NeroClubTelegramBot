@@ -6,6 +6,7 @@ import sqlite3
 from typing import Any
 
 from .access import effective_access
+from .club_access import is_member
 from .integrations.telegram import TelegramClient, TelegramError
 from .site_access import queue_site_access_job
 
@@ -272,6 +273,8 @@ async def reconcile_members(
     site_deactivation_enabled: bool = True,
     admin_telegram_ids: tuple[int, ...] | None = None,
     chat_label: str = "чате",
+    primary_group: bool = True,
+    club_resource_sync: bool = False,
 ) -> dict[str, int]:
     users = db.execute("SELECT * FROM users WHERE telegram_id IS NOT NULL").fetchall()
     checked = active = denied = removed = would_remove = failed = 0
@@ -282,11 +285,20 @@ async def reconcile_members(
             ).fetchone()
             member = await telegram.get_chat_member(chat_id, user["telegram_id"])
             member_status = member.get("status") if isinstance(member, dict) else None
+            if isinstance(member,dict) and member_status == "restricted" and not is_member(member):
+                member_status = "left"
             access = effective_access(user, subscription)
-            db.execute(
-                "UPDATE users SET telegram_membership_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-                (member_status or "unknown", user["id"]),
-            )
+            if primary_group and club_resource_sync and member_status in {"member","administrator","creator","restricted","left","kicked"}:
+                db.execute("INSERT OR IGNORE INTO outbox_jobs(kind,aggregate_key,payload) VALUES ('club.access',?,?)",
+                           (f"reconcile-club-{user['id']}-{user['updated_at']}-{member_status}",json.dumps({"user_id":user["id"]})))
+                allowed_resource = is_member(member) and not user["telegram_banned"] and user["access_override"] != "deny"
+                if site_deactivation_enabled and user["wordpress_user_id"]:
+                    queue_site_access_job(db,user["id"],"restore" if allowed_resource else "deactivate",f"reconcile-resource-{user['id']}-{user['updated_at']}-{member_status}")
+            if primary_group:
+                db.execute(
+                    "UPDATE users SET telegram_membership_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                    (member_status or "unknown", user["id"]),
+                )
             checked += 1
             if access == "active":
                 active += 1
@@ -294,7 +306,7 @@ async def reconcile_members(
                     "DELETE FROM telegram_removal_warnings WHERE user_id = ? AND chat_id = ?",
                     (user["id"], str(chat_id)),
                 )
-                if member_status == "left" and site_deactivation_enabled:
+                if primary_group and member_status == "left" and site_deactivation_enabled:
                     queue_site_access_job(db, user["id"], "deactivate", f"reconcile-left-{user['id']}")
             else:
                 denied += 1
@@ -318,7 +330,7 @@ async def reconcile_members(
                             (user["id"],),
                         )
                         await telegram.ban_chat_member(chat_id, user["telegram_id"])
-                        if site_deactivation_enabled and (
+                        if primary_group and site_deactivation_enabled and (
                             user["wordpress_user_id"]
                             or user["wordpress_login"]
                             or user["wordpress_email"]

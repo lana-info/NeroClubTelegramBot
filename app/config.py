@@ -41,6 +41,9 @@ class Settings:
     wordpress_shared_secret: str = os.getenv("WORDPRESS_SHARED_SECRET", "")
     wordpress_mcp_username: str = os.getenv("WORDPRESS_MCP_USERNAME", "")
     wordpress_mcp_application_password: str = os.getenv("WORDPRESS_MCP_APPLICATION_PASSWORD", "")
+    club_resources_dry_run: bool = os.getenv("CLUB_RESOURCES_DRY_RUN", os.getenv("DRY_RUN", "true")).lower() == "true"
+    club_license_base_url: str = os.getenv("CLUB_LICENSE_BASE_URL", "").rstrip("/")
+    club_license_service_secret: str = os.getenv("CLUB_VIP_SERVICE_SECRET", "")
     app_keys_encryption_key: str = os.getenv("APP_KEYS_ENCRYPTION_KEY", "")
     payment_url: str = os.getenv("PAYMENT_URL", "")
     new_member_price_usd: str = os.getenv("NEW_MEMBER_PRICE_USD", "20")

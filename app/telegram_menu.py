@@ -62,4 +62,4 @@ def command_from_text(text: str | None) -> str | None:
     if not normalized.startswith("/"):
         return None
     command = normalized.split()[0].split("@", 1)[0]
-    return "/my-keys" if command == "/my_keys" else command
+    return {"/my_keys": "/my-keys", "/site_access": "/site-access"}.get(command, command)

@@ -142,14 +142,15 @@ def revoke_app_key(db: sqlite3.Connection, external_key_id: str) -> None:
     )
 
 
-def keys_for_user(db: sqlite3.Connection, user_id: int, encryption_key: str) -> list[dict[str, Any]]:
+def keys_for_user(db: sqlite3.Connection, user_id: int, encryption_key: str, *, club_access: bool | None = None) -> list[dict[str, Any]]:
     user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     subscription = db.execute(
         "SELECT * FROM subscriptions WHERE user_id = ? ORDER BY id DESC LIMIT 1", (user_id,)
     ).fetchone()
     if not user:
         return []
-    club_access = effective_access(user, subscription) == "active"
+    if club_access is None:
+        club_access = effective_access(user, subscription) == "active"
     licensed_access = bool(db.execute(
         "SELECT 1 FROM app_keys WHERE assigned_user_id = ? AND access_plan = 'license' "
         "AND status = 'issued' LIMIT 1", (user_id,)
@@ -162,6 +163,8 @@ def keys_for_user(db: sqlite3.Connection, user_id: int, encryption_key: str) -> 
     ).fetchall()
     result = []
     for row in rows:
+        if not club_access and row["access_plan"] != "license":
+            continue
         if _is_expired(row["key_expires_at"]):
             db.execute(
                 "UPDATE app_keys SET status = 'expired', updated_at = CURRENT_TIMESTAMP WHERE id = ?",
